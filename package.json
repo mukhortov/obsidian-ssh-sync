@@ -1,0 +1,21 @@
+{
+  "name": "obsidian-ssh-sync",
+  "version": "0.1.0",
+  "description": "Sync Obsidian vaults with remote servers via SSH",
+  "main": "main.js",
+  "scripts": {
+    "dev": "node esbuild.config.mjs",
+    "build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "tsc -noEmit -skipLibCheck"
+  },
+  "devDependencies": {
+    "@types/node": "25.5.2",
+    "builtin-modules": "5.0.0",
+    "esbuild": "0.28.0",
+    "obsidian": "latest",
+    "typescript": "6.0.2",
+    "vitest": "4.1.4"
+  }
+}

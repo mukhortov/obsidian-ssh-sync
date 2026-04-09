@@ -1,0 +1,10 @@
+.DS_Store
+*.swp
+*.js.map
+.vscode
+.obsidian/
+.agents/
+node_modules/
+dist/
+skills-lock.json
+main.js

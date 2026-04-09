@@ -1,0 +1,94 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  build:
+    name: Lint & Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - run: npm ci
+
+      - name: Type-check
+        run: npm run lint
+
+      - name: Build
+        run: npm run build
+
+      - name: Upload plugin artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: obsidian-ssh-sync
+          if-no-files-found: error
+          path: |
+            main.js
+            manifest.json
+
+  unit-tests:
+    name: Unit & Scenario Tests
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - run: npm ci
+
+      - name: Run tests
+        run: npm test
+
+  e2e-tests:
+    name: E2E Tests (SSH + rsync)
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - run: npm ci
+
+      - name: Install rsync and openssh-server
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y rsync openssh-server
+
+      - name: Start SSH server
+        run: sudo systemctl start ssh
+
+      - name: Set up passwordless SSH to localhost
+        run: |
+          ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519 -N ""
+          cat ~/.ssh/id_ed25519.pub >> ~/.ssh/authorized_keys
+          chmod 600 ~/.ssh/authorized_keys
+          ssh-keyscan localhost >> ~/.ssh/known_hosts
+
+      - name: Verify SSH connectivity
+        run: ssh -o BatchMode=yes localhost true
+
+      - name: Run tests (including E2E)
+        run: npm test
+        env:
+          E2E_SSH_HOST: localhost
+          E2E_REMOTE_PATH: /tmp/e2e-remote
