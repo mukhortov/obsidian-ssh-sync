@@ -22,23 +22,29 @@ Sync your Obsidian vaults with remote servers via SSH.
 
 ## Installation
 
-### From source (development)
+### From release
 
-1. Clone this repository into your Obsidian plugins directory:
+1. Download `obsidian-ssh-sync-v*.zip` from the [latest release](https://github.com/mukhortov/obsidian-ssh-sync/releases/latest)
+2. Unzip into your vault's plugins directory:
+   ```
+   <vault>/.obsidian/plugins/
+   ```
+   This creates `<vault>/.obsidian/plugins/obsidian-ssh-sync/` with `main.js` and `manifest.json` inside.
+3. Enable "SSH Sync" in Obsidian Settings > Community Plugins
+
+### Manual install (local build)
+
+1. Clone this repository and build:
+   ```
+   git clone https://github.com/mukhortov/obsidian-ssh-sync.git
+   cd obsidian-ssh-sync
+   npm install && npm run build
+   ```
+2. Copy `main.js` and `manifest.json` into your vault's plugins directory:
    ```
    <vault>/.obsidian/plugins/obsidian-ssh-sync/
    ```
-2. Run `npm install && npm run build` in the plugin directory
 3. Enable "SSH Sync" in Obsidian Settings > Community Plugins
-
-### Manual install (release)
-
-Only two files are needed in `<vault>/.obsidian/plugins/obsidian-ssh-sync/`:
-
-- `main.js` — the bundled plugin
-- `manifest.json` — plugin metadata
-
-Copy these from a release or from your build output. You do not need `node_modules/`, `src/`, `tests/`, or any other project files.
 
 ## Configuration
 

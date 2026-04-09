@@ -1,0 +1,91 @@
+name: Release
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+
+jobs:
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      startsWith(github.event.workflow_run.head_branch, 'v')
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout at tag SHA
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+
+      - name: Extract and validate version
+        id: version
+        env:
+          TAG: ${{ github.event.workflow_run.head_branch }}
+        run: |
+          VERSION="${TAG#v}"
+
+          # Verify this is actually a tag, not a branch starting with 'v'
+          if ! git tag -l "$TAG" | grep -q .; then
+            echo "::error::${TAG} is not a tag in this repository"
+            exit 1
+          fi
+
+          MANIFEST_VERSION=$(jq -r '.version' manifest.json)
+          PACKAGE_VERSION=$(jq -r '.version' package.json)
+
+          if [ "$VERSION" != "$MANIFEST_VERSION" ] || [ "$VERSION" != "$PACKAGE_VERSION" ]; then
+            echo "::error::Version mismatch: tag=${VERSION}, manifest.json=${MANIFEST_VERSION}, package.json=${PACKAGE_VERSION}"
+            exit 1
+          fi
+
+          echo "tag=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Version ${VERSION} is consistent across tag, manifest.json, and package.json"
+
+      - name: Download CI artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: obsidian-ssh-sync
+          path: artifact
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Package zip
+        env:
+          VERSION: ${{ steps.version.outputs.tag }}
+        run: |
+          mkdir obsidian-ssh-sync
+          cp artifact/main.js artifact/manifest.json obsidian-ssh-sync/
+          zip -r "obsidian-ssh-sync-v${VERSION}.zip" obsidian-ssh-sync/
+
+      - name: Generate changelog
+        id: changelog
+        env:
+          VERSION: ${{ steps.version.outputs.tag }}
+        run: |
+          TAG="v${VERSION}"
+          PREV_TAG=$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || echo "")
+          if [ -n "$PREV_TAG" ]; then
+            CHANGELOG=$(git log "${PREV_TAG}..${TAG}" --oneline)
+          else
+            CHANGELOG=$(git log "${TAG}" --oneline)
+          fi
+          DELIM="CHANGELOG_$(openssl rand -hex 8)"
+          echo "notes<<${DELIM}" >> "$GITHUB_OUTPUT"
+          echo "$CHANGELOG" >> "$GITHUB_OUTPUT"
+          echo "${DELIM}" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.version.outputs.tag }}
+          RELEASE_NOTES: ${{ steps.changelog.outputs.notes }}
+        run: |
+          gh release create "v${VERSION}" \
+            --title "v${VERSION}" \
+            --notes "$RELEASE_NOTES" \
+            "obsidian-ssh-sync-v${VERSION}.zip"
