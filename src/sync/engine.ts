@@ -64,6 +64,14 @@ export class SyncEngine {
       return { success: false, error: "File not found" };
     }
 
+    // Guard: reject directories — folders are synced implicitly via their contents.
+    // Pushing a directory as if it were a file causes rsync to nest it inside
+    // the destination, creating infinite recursive folder structures.
+    const stat = fs.statSync(fullPath);
+    if (stat.isDirectory()) {
+      return { success: false, error: "Path is a directory — folders are synced via their contents" };
+    }
+
     // Ensure remote parent directory exists before single-file rsync.
     // rsync does not auto-create intermediate directories for single-file transfers.
     const parentDir = path.posix.dirname(relativePath);

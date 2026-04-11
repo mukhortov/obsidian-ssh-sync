@@ -1,6 +1,6 @@
 import { App, Notice, PluginSettingTab, Setting, Modal } from "obsidian";
 import type SSHSyncPlugin from "./main";
-import { SyncLogEntry } from "./types";
+import { SyncLogEntry, MIN_POLL_INTERVAL_SECONDS } from "./types";
 
 export class SSHSyncSettingTab extends PluginSettingTab {
   plugin: SSHSyncPlugin;
@@ -55,20 +55,30 @@ export class SSHSyncSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Poll interval")
-      .setDesc("How often to check for remote changes (in seconds)")
-      .addText((text) =>
+      .setDesc(`How often to check for remote changes (in seconds, minimum ${MIN_POLL_INTERVAL_SECONDS})`)
+      .addText((text) => {
         text
           .setPlaceholder("60")
-          .setValue(String(this.plugin.settings.pollIntervalSeconds))
-          .onChange(async (value) => {
-            const num = parseInt(value, 10);
-            if (!isNaN(num) && num > 0) {
-              this.plugin.settings.pollIntervalSeconds = num;
-              await this.plugin.saveSettings();
-              this.plugin.onSettingsChanged();
-            }
-          })
-      );
+          .setValue(String(this.plugin.settings.pollIntervalSeconds));
+        text.inputEl.type = "number";
+        text.inputEl.min = String(MIN_POLL_INTERVAL_SECONDS);
+        text.inputEl.step = "1";
+        // Validate on blur instead of every keystroke so the user can
+        // freely clear and retype values without the field resetting.
+        text.inputEl.addEventListener("blur", async () => {
+          const num = parseInt(text.inputEl.value, 10);
+          if (isNaN(num) || num < MIN_POLL_INTERVAL_SECONDS) {
+            this.plugin.settings.pollIntervalSeconds = MIN_POLL_INTERVAL_SECONDS;
+            text.setValue(String(MIN_POLL_INTERVAL_SECONDS));
+            await this.plugin.saveSettings();
+            this.plugin.onSettingsChanged();
+            return;
+          }
+          this.plugin.settings.pollIntervalSeconds = num;
+          await this.plugin.saveSettings();
+          this.plugin.onSettingsChanged();
+        });
+      });
 
     new Setting(containerEl)
       .setName("Sync on save")

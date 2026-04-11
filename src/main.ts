@@ -1,5 +1,5 @@
-import { Plugin, Notice, TAbstractFile, TFile, Menu, setIcon } from "obsidian";
-import { SyncConfig, SyncStatus, DEFAULT_CONFIG, SyncLogEntry, ManifestEntry } from "./types";
+import { Plugin, Notice, TAbstractFile, TFile, TFolder, Menu, setIcon } from "obsidian";
+import { SyncConfig, SyncStatus, DEFAULT_CONFIG, SyncLogEntry, ManifestEntry, MIN_POLL_INTERVAL_SECONDS, SUPPRESS_PRE_OP_MS, SUPPRESS_POST_OP_MS } from "./types";
 import { SyncResult } from "./sync/engine";
 import { SSHSyncSettingTab } from "./settings";
 import { SyncEngine } from "./sync/engine";
@@ -73,7 +73,7 @@ export default class SSHSyncPlugin extends Plugin {
 
     this.registerEvent(
       this.app.vault.on("modify", (file: TAbstractFile) => {
-        if (file.path && this.settings.syncOnSave && this.settings.enabled) {
+        if (file instanceof TFile && file.path && this.settings.syncOnSave && this.settings.enabled) {
           this.fileWatcher?.onFileChange(file.path);
         }
       })
@@ -81,7 +81,7 @@ export default class SSHSyncPlugin extends Plugin {
 
     this.registerEvent(
       this.app.vault.on("create", (file: TAbstractFile) => {
-        if (file.path && this.settings.syncOnSave && this.settings.enabled) {
+        if (file instanceof TFile && file.path && this.settings.syncOnSave && this.settings.enabled) {
           this.fileWatcher?.onFileChange(file.path);
         }
       })
@@ -89,7 +89,7 @@ export default class SSHSyncPlugin extends Plugin {
 
     this.registerEvent(
       this.app.vault.on("delete", (file: TAbstractFile) => {
-        if (file.path && this.settings.syncOnSave && this.settings.enabled) {
+        if (file instanceof TFile && file.path && this.settings.syncOnSave && this.settings.enabled) {
           this.fileWatcher?.onFileDeleted(file.path);
         }
       })
@@ -98,7 +98,7 @@ export default class SSHSyncPlugin extends Plugin {
     this.registerEvent(
       this.app.vault.on("rename", (file: TAbstractFile, oldPath: string) => {
         if (this.settings.syncOnSave && this.settings.enabled) {
-          if (oldPath && file.path) {
+          if (file instanceof TFile && oldPath && file.path) {
             this.fileWatcher?.onFileRenamed(file.path, oldPath);
           }
         }
@@ -155,7 +155,7 @@ export default class SSHSyncPlugin extends Plugin {
     this.poller = new Poller(async () => {
       if (!this.settings.enabled || !this.syncEngine) return;
       await this.pollRemoteChanges();
-    }, this.settings.pollIntervalSeconds * 1000);
+    }, Math.max(this.settings.pollIntervalSeconds, MIN_POLL_INTERVAL_SECONDS) * 1000);
 
     if (this.settings.enabled) {
       this.poller.start();
@@ -233,7 +233,9 @@ export default class SSHSyncPlugin extends Plugin {
           break;
         case "pullWithoutDelete":
           if (this.syncEngine) {
+            this.fileWatcher?.suppress(SUPPRESS_PRE_OP_MS);
             const result = await this.syncEngine.pullWithoutDelete();
+            this.fileWatcher?.suppress(SUPPRESS_POST_OP_MS);
             if (!result.success) {
               this.updateStatusBar("error");
               new Notice(`SSH Sync pull failed: ${result.error}`);
@@ -241,7 +243,9 @@ export default class SSHSyncPlugin extends Plugin {
           }
           break;
         case "pullWithDelete":
+          this.fileWatcher?.suppress(SUPPRESS_PRE_OP_MS);
           await this.syncEngine?.pull();
+          this.fileWatcher?.suppress(SUPPRESS_POST_OP_MS);
           break;
         case "deleteRemoteFiles":
           if (this.syncEngine) {
@@ -255,7 +259,9 @@ export default class SSHSyncPlugin extends Plugin {
           break;
         case "deleteLocalFiles":
           if (this.syncEngine) {
+            this.fileWatcher?.suppress(SUPPRESS_PRE_OP_MS);
             const deleted = this.syncEngine.deleteLocalFiles(effect.files, new Set(effect.skipPaths));
+            this.fileWatcher?.suppress(SUPPRESS_POST_OP_MS);
             // Notification handled by the notify effect that follows
           }
           break;
@@ -295,7 +301,9 @@ export default class SSHSyncPlugin extends Plugin {
           break;
         case "fullSync":
           if (this.syncEngine) {
+            this.fileWatcher?.suppress(SUPPRESS_PRE_OP_MS);
             const result = await this.syncEngine.fullSync();
+            this.fileWatcher?.suppress(SUPPRESS_POST_OP_MS);
             if (result.success) {
               this.updateStatusBar("idle");
               new Notice(`SSH Sync: Complete — ${result.changedFiles.length} file(s) synced`);
@@ -338,6 +346,12 @@ export default class SSHSyncPlugin extends Plugin {
     return this.syncLock.run(async () => {
       this.updateStatusBar("syncing");
       new Notice("SSH Sync: Starting full sync...");
+      // Suppress watcher events during sync to prevent feedback loops.
+      // Pull writes files to vault → Obsidian fires events → watcher would
+      // push them right back. We suppress during the operation and for a
+      // short grace period afterward (just enough for Obsidian's filesystem
+      // watcher to deliver its events — typically < 500ms).
+      this.fileWatcher?.suppress(SUPPRESS_PRE_OP_MS);
       try {
         const result = await this.syncEngine!.fullSync();
         if (result.success) {
@@ -347,8 +361,13 @@ export default class SSHSyncPlugin extends Plugin {
           this.updateStatusBar("error");
           new Notice(`SSH Sync: Failed — ${result.error}`);
         }
+        // Grace period: Obsidian events from the pull may still be in flight.
+        // 1s is enough for filesystem events to settle without blocking
+        // subsequent user edits for too long.
+        this.fileWatcher?.suppress(SUPPRESS_POST_OP_MS);
         return result;
       } catch (err) {
+        this.fileWatcher?.suppress(SUPPRESS_POST_OP_MS);
         this.updateStatusBar("error");
         const message = (err as Error).message || "Unknown error";
         new Notice(`SSH Sync: Error — ${message}`);
@@ -375,7 +394,7 @@ export default class SSHSyncPlugin extends Plugin {
   onSettingsChanged(): void {
     if (this.poller) {
       if (this.settings.enabled) {
-        this.poller.updateInterval(this.settings.pollIntervalSeconds * 1000);
+        this.poller.updateInterval(Math.max(this.settings.pollIntervalSeconds, MIN_POLL_INTERVAL_SECONDS) * 1000);
         this.poller.start();
       } else {
         this.poller.stop();

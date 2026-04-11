@@ -310,4 +310,134 @@ describe("Conflicts", () => {
       expect(logEffect!.entry.message).toContain("restored");
     });
   });
+
+  describe("C9: Conflict on file moved to different folder locally", () => {
+    it("no conflict after local move propagates — manifest updated for new path", () => {
+      // After local move: old path deleted on remote, new path pushed.
+      // Manifest now has the new path with matching lastSyncedMtime.
+      // Remote changes to the NEW path arrive — no conflict since localMtime == lastSyncedMtime.
+      const manifest = {
+        "subfolder/moved-note.md": makeManifestEntry("subfolder/moved-note.md", { lastSyncedMtime: 1000 }),
+      };
+      const localMtimes = new Map([["subfolder/moved-note.md", 1000]]); // no local edit since push
+
+      const decision = decidePullAction(
+        createInitialState(true),
+        { changedFiles: ["subfolder/moved-note.md"], deletedFiles: [] },
+        manifest,
+        config,
+        new Set(),
+        localMtimes
+      );
+
+      // Clean pull, no conflict
+      expect(decision.effects.some((e) => e.type === "pullWithoutDelete")).toBe(true);
+      expect(decision.effects.some((e) => e.type === "resolveConflict")).toBe(false);
+    });
+  });
+
+  describe("C10: Local folder rename conflicts with remote edits", () => {
+    it("no conflict after flush — old paths deleted on remote, new paths in manifest", () => {
+      // After local folder rename: old paths deleted on remote, new paths pushed.
+      // Remote poll finds changedFiles for old paths (which no longer exist locally
+      // or in manifest). Since they're gone, no conflict.
+      const manifest = {
+        // Manifest reflects the new folder structure after flush
+        "renamed-folder/a.md": makeManifestEntry("renamed-folder/a.md", { lastSyncedMtime: 1000 }),
+        "renamed-folder/b.md": makeManifestEntry("renamed-folder/b.md", { lastSyncedMtime: 1000 }),
+      };
+      const localMtimes = new Map([
+        ["renamed-folder/a.md", 1000],
+        ["renamed-folder/b.md", 1000],
+      ]);
+
+      // Poll reports changes for OLD paths that no longer exist
+      const decision = decidePullAction(
+        createInitialState(true),
+        { changedFiles: ["old-folder/a.md", "old-folder/b.md"], deletedFiles: [] },
+        manifest,
+        config,
+        new Set(),
+        localMtimes
+      );
+
+      // Old paths have no manifest entry and don't exist locally → treated as restored
+      expect(decision.effects.some((e) => e.type === "pullWithoutDelete")).toBe(true);
+      expect(decision.effects.some((e) => e.type === "resolveConflict")).toBe(false);
+    });
+  });
+
+  describe("C11: Both sides create file at same path simultaneously", () => {
+    it("treats as new pull when no manifest entry exists but file exists locally", () => {
+      // No manifest entry for the file (never synced before).
+      // Both sides created the same path independently.
+      // localMtimes has the file (it exists locally).
+      const manifest = {}; // no prior sync record
+      const localMtimes = new Map([["shared/new.md", 2000]]); // local file exists
+
+      const decision = decidePullAction(
+        createInitialState(true),
+        { changedFiles: ["shared/new.md"], deletedFiles: [] },
+        manifest,
+        config,
+        new Set(),
+        localMtimes
+      );
+
+      // No manifest entry → treated as new file from remote, clean pull
+      // (no conflict detection without manifest entry to compare against)
+      expect(decision.effects.some((e) => e.type === "pullWithoutDelete")).toBe(true);
+      expect(decision.effects.some((e) => e.type === "resolveConflict")).toBe(false);
+    });
+  });
+
+  describe("C12: Local delete folder while remote adds file", () => {
+    it("pulls new remote file cleanly even when local folder was deleted", () => {
+      // Local deleted the folder, but remote added a new file in that folder.
+      // decidePullAction sees changedFiles with the new file, no manifest entry,
+      // file doesn't exist locally → clean pull.
+      const manifest = {};
+      const localMtimes = new Map(); // folder and its contents don't exist locally
+
+      const decision = decidePullAction(
+        createInitialState(true),
+        { changedFiles: ["project/b.md"], deletedFiles: [] },
+        manifest,
+        config,
+        new Set(),
+        localMtimes
+      );
+
+      // Clean pull of new file — no conflict
+      expect(decision.effects.some((e) => e.type === "pullWithoutDelete")).toBe(true);
+      expect(decision.effects.some((e) => e.type === "resolveConflict")).toBe(false);
+    });
+  });
+
+  describe("C13: Both sides rename same file to different names", () => {
+    it("pulls remote-renamed file cleanly when it does not exist locally", () => {
+      // Complex timing: both sides renamed the same file.
+      // Local flush already pushed its renamed version and deleted old path.
+      // Remote has a different name. Poll picks up the remote-renamed file
+      // as a changedFile — it doesn't exist locally and has no manifest entry.
+      const manifest = {
+        // Manifest only knows about the LOCAL renamed version
+        "notes/local-name.md": makeManifestEntry("notes/local-name.md", { lastSyncedMtime: 1000 }),
+      };
+      const localMtimes = new Map([["notes/local-name.md", 1000]]);
+
+      const decision = decidePullAction(
+        createInitialState(true),
+        { changedFiles: ["notes/remote-name.md"], deletedFiles: [] },
+        manifest,
+        config,
+        new Set(),
+        localMtimes
+      );
+
+      // Remote-renamed file has no manifest entry, doesn't exist locally → clean pull
+      expect(decision.effects.some((e) => e.type === "pullWithoutDelete")).toBe(true);
+      expect(decision.effects.some((e) => e.type === "resolveConflict")).toBe(false);
+    });
+  });
 });

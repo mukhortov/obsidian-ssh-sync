@@ -3,11 +3,36 @@ export interface WatcherFlush {
   deletedFiles: Set<string>;
 }
 
+/**
+ * Detect paths with 3+ consecutive identical leading segments, indicating
+ * a runaway recursive sync loop (e.g., "X/X/X/..." or "X/X/X/file.md").
+ * Two identical segments (e.g., "notes/notes/file.md") are allowed since
+ * users can legitimately create such structures.
+ */
+function hasRecursiveNesting(filePath: string): boolean {
+  const segments = filePath.split("/");
+  if (segments.length < 3) return false;
+  // Check for 3 consecutive identical segments starting from the beginning
+  for (let i = 0; i <= segments.length - 3; i++) {
+    if (segments[i] === segments[i + 1] && segments[i + 1] === segments[i + 2]) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export class FileWatcher {
   private pendingChanges = new Set<string>();
   private pendingDeletes = new Set<string>();
   private activeFlush = new Set<string>();
   private timer: ReturnType<typeof setTimeout> | null = null;
+
+  /**
+   * When > 0, all incoming events are suppressed. This prevents feedback
+   * loops where a pull writes files to the vault, Obsidian detects the
+   * changes, and the watcher pushes them right back.
+   */
+  private suppressUntil = 0;
 
   /**
    * Tracks rename chains: maps current path → original path.
@@ -20,7 +45,22 @@ export class FileWatcher {
     private onSync: (flush: WatcherFlush) => Promise<void>
   ) {}
 
+  /**
+   * Suppress all incoming events for the given duration. Use this before
+   * any operation that writes files to the vault (pull, fullSync) to
+   * prevent the watcher from pushing those files right back.
+   */
+  suppress(durationMs: number): void {
+    this.suppressUntil = Date.now() + durationMs;
+  }
+
+  private isSuppressed(): boolean {
+    return Date.now() < this.suppressUntil;
+  }
+
   onFileChange(relativePath: string): void {
+    if (this.isSuppressed()) return;
+    if (hasRecursiveNesting(relativePath)) return;
     this.pendingChanges.add(relativePath);
     // If a file was deleted then re-created (rename target), remove from deletes
     this.pendingDeletes.delete(relativePath);
@@ -28,6 +68,10 @@ export class FileWatcher {
   }
 
   onFileRenamed(newPath: string, oldPath: string): void {
+    // Reject recursively-nested paths that indicate a sync feedback loop
+    if (this.isSuppressed()) return;
+    if (hasRecursiveNesting(newPath)) return;
+
     // Track the rename chain: if oldPath was itself renamed from an
     // earlier origin, carry that origin forward to newPath.
     const origin = this.renameOrigins.get(oldPath) ?? oldPath;
@@ -54,6 +98,8 @@ export class FileWatcher {
   }
 
   onFileDeleted(relativePath: string): void {
+    if (this.isSuppressed()) return;
+    if (hasRecursiveNesting(relativePath)) return;
     this.pendingDeletes.add(relativePath);
     // If a file was changed then deleted (rename source), remove from changes
     this.pendingChanges.delete(relativePath);

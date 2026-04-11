@@ -50,6 +50,23 @@ export interface RsyncResult {
   exitCode: number;
 }
 
+export const MIN_POLL_INTERVAL_SECONDS = 5;
+
+/**
+ * Pre-operation suppress: blocks watcher events while a sync operation
+ * (pull, fullSync, deleteLocalFiles) is in progress. Set long enough to
+ * cover any operation; replaced by SUPPRESS_POST_OP_MS on completion.
+ */
+export const SUPPRESS_PRE_OP_MS = 60000;
+
+/**
+ * Post-operation suppress: grace period after a sync operation completes,
+ * giving Obsidian's filesystem watcher time to deliver its events before
+ * the watcher resumes accepting them. Typically < 500ms is enough, but
+ * 1s provides a safe margin without noticeably blocking user edits.
+ */
+export const SUPPRESS_POST_OP_MS = 1000;
+
 export const DEFAULT_CONFIG: SyncConfig = {
   enabled: false,
   sshHost: "",

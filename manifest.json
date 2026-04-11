@@ -1,7 +1,7 @@
 {
   "id": "obsidian-ssh-sync",
   "name": "SSH Sync",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "minAppVersion": "1.4.0",
   "description": "Sync vaults with remote servers via SSH",
   "author": "Peter Mukhortov",

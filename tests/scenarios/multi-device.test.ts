@@ -183,4 +183,140 @@ describe("Multi-Device", () => {
     expect(deleteEffect).toBeDefined();
     expect(deleteEffect!.files).toContain("b.md");
   });
+
+  it("M4: both Macs rename same folder to different names — each pulls the other's version", () => {
+    // After both flushes, VPS has files at both new paths.
+    // Mac A renamed folder/ → folder-alpha/, Mac B renamed folder/ → folder-beta/
+    // Mac A polls and sees Mac B's renamed files as new changedFiles.
+
+    // Mac A's manifest: only knows about its own renamed paths
+    const manifestA = {
+      "folder-alpha/note1.md": makeManifestEntry("folder-alpha/note1.md", { lastSyncedMtime: 1000 }),
+      "folder-alpha/note2.md": makeManifestEntry("folder-alpha/note2.md", { lastSyncedMtime: 1000 }),
+    };
+    const localMtimesA = new Map([
+      ["folder-alpha/note1.md", 1000],
+      ["folder-alpha/note2.md", 1000],
+    ]);
+
+    // Mac A's poll detects Mac B's renamed files
+    const decisionA = decidePullAction(
+      createInitialState(true),
+      { changedFiles: ["folder-beta/note1.md", "folder-beta/note2.md"], deletedFiles: [] },
+      manifestA,
+      sharedConfig,
+      new Set(),
+      localMtimesA
+    );
+
+    // Mac B's files have no manifest entry on Mac A, don't exist locally → clean pull
+    expect(decisionA.effects.some((e) => e.type === "pullWithoutDelete")).toBe(true);
+    expect(decisionA.effects.some((e) => e.type === "resolveConflict")).toBe(false);
+
+    // Mac B's perspective: sees Mac A's renamed files
+    const manifestB = {
+      "folder-beta/note1.md": makeManifestEntry("folder-beta/note1.md", { lastSyncedMtime: 1000 }),
+      "folder-beta/note2.md": makeManifestEntry("folder-beta/note2.md", { lastSyncedMtime: 1000 }),
+    };
+    const localMtimesB = new Map([
+      ["folder-beta/note1.md", 1000],
+      ["folder-beta/note2.md", 1000],
+    ]);
+
+    const decisionB = decidePullAction(
+      createInitialState(true),
+      { changedFiles: ["folder-alpha/note1.md", "folder-alpha/note2.md"], deletedFiles: [] },
+      manifestB,
+      sharedConfig,
+      new Set(),
+      localMtimesB
+    );
+
+    expect(decisionB.effects.some((e) => e.type === "pullWithoutDelete")).toBe(true);
+    expect(decisionB.effects.some((e) => e.type === "resolveConflict")).toBe(false);
+  });
+
+  it("M5: one Mac creates folder structure, other Mac pulls it", () => {
+    // Mac A created a new folder structure with 3 files.
+    // Mac B polls and sees 3 new changedFiles in new dirs.
+    // No manifest entries → clean pull.
+    const manifestB = {}; // Mac B has no knowledge of these files
+    const localMtimesB = new Map<string, number>(); // none exist locally
+
+    const decision = decidePullAction(
+      createInitialState(true),
+      {
+        changedFiles: [
+          "projects/2026/plan.md",
+          "projects/2026/tasks/backlog.md",
+          "projects/2026/tasks/sprint.md",
+        ],
+        deletedFiles: [],
+      },
+      manifestB,
+      sharedConfig,
+      new Set(),
+      localMtimesB
+    );
+
+    // All 3 files are new from remote — clean pull
+    expect(decision.effects.some((e) => e.type === "pullWithoutDelete")).toBe(true);
+    expect(decision.effects.some((e) => e.type === "resolveConflict")).toBe(false);
+
+    // Notification mentions pulled files
+    const notify = findEffect(decision.effects, "notify");
+    expect(notify).toBeDefined();
+    expect(notify!.message).toContain("pulled");
+  });
+
+  it("M6: one Mac deletes folder, other Mac adds files to it", () => {
+    // Mac A deleted folder/old.md. Mac B added folder/new.md.
+    // After both sync to VPS:
+    //   - Mac A polls: sees folder/new.md as changedFile (new from Mac B)
+    //   - Mac B polls: sees folder/old.md as deletedFile (deleted by Mac A)
+
+    // Mac A's perspective: folder/new.md is new from remote
+    const manifestA = {
+      // Mac A deleted folder/old.md — manifest entry removed after delete
+    };
+    const localMtimesA = new Map<string, number>(); // folder/new.md doesn't exist locally
+
+    const decisionA = decidePullAction(
+      createInitialState(true),
+      { changedFiles: ["folder/new.md"], deletedFiles: [] },
+      manifestA,
+      sharedConfig,
+      new Set(),
+      localMtimesA
+    );
+
+    // Mac A gets a clean pull of the new file
+    expect(decisionA.effects.some((e) => e.type === "pullWithoutDelete")).toBe(true);
+    expect(decisionA.effects.some((e) => e.type === "resolveConflict")).toBe(false);
+
+    // Mac B's perspective: folder/old.md was deleted by Mac A
+    const manifestB = {
+      "folder/old.md": makeManifestEntry("folder/old.md", { lastSyncedMtime: 1000 }),
+      "folder/new.md": makeManifestEntry("folder/new.md", { lastSyncedMtime: 1000 }),
+    };
+    const localMtimesB = new Map([
+      ["folder/old.md", 1000], // unchanged locally
+      ["folder/new.md", 1000],
+    ]);
+
+    const decisionB = decidePullAction(
+      createInitialState(true),
+      { changedFiles: [], deletedFiles: ["folder/old.md"] },
+      manifestB,
+      sharedConfig,
+      new Set(),
+      localMtimesB
+    );
+
+    // Mac B safely deletes the file (unchanged locally, deleted on remote)
+    const deleteEffect = findEffect(decisionB.effects, "deleteLocalFiles");
+    expect(deleteEffect).toBeDefined();
+    expect(deleteEffect!.files).toContain("folder/old.md");
+    expect(decisionB.effects.some((e) => e.type === "resolveConflict")).toBe(false);
+  });
 });

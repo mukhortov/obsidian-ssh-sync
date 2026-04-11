@@ -299,4 +299,669 @@ describe("Local Changes → Remote", () => {
     watcher.dispose();
     vi.useRealTimers();
   });
+
+  // ─── New use cases L14–L41 ───────────────────────────────────────────
+
+  it("L14: delete last file in subfolder (orphaned empty directory)", async () => {
+    vi.useFakeTimers();
+    let flushed: WatcherFlush | null = null;
+    const watcher = new FileWatcher(500, async (flush) => { flushed = flush; });
+
+    // Only file in the subfolder is deleted
+    watcher.onFileDeleted("journal/2026/only-entry.md");
+
+    await vi.advanceTimersByTimeAsync(600);
+
+    expect(flushed).not.toBeNull();
+    expect(flushed!.deletedFiles.has("journal/2026/only-entry.md")).toBe(true);
+    expect(flushed!.changedFiles.size).toBe(0);
+
+    // Engine side: deleteRemoteFile removes from manifest and calls rm on remote
+    const deleteResult = await env.engine.deleteRemoteFile("journal/2026/only-entry.md");
+    expect(deleteResult.success).toBe(true);
+    expect(commands.executeCommand).toHaveBeenCalled();
+
+    watcher.dispose();
+    vi.useRealTimers();
+  });
+
+  it("L15: move file from root to nested subfolder", async () => {
+    vi.useFakeTimers();
+    let flushed: WatcherFlush | null = null;
+    const watcher = new FileWatcher(500, async (flush) => { flushed = flush; });
+
+    watcher.onFileRenamed("projects/deep/notes/idea.md", "idea.md");
+
+    await vi.advanceTimersByTimeAsync(600);
+
+    expect(flushed).not.toBeNull();
+    expect(flushed!.changedFiles.has("projects/deep/notes/idea.md")).toBe(true);
+    expect(flushed!.deletedFiles.has("idea.md")).toBe(true);
+
+    // Engine: pushFile should call mkdir for the nested parent dir
+    createTestFile(env, "projects/deep/notes/idea.md", "content");
+    vi.mocked(commands.runRsync).mockResolvedValue({
+      changedFiles: ["projects/deep/notes/idea.md"], deletedFiles: [],
+      stdout: "", stderr: "", exitCode: 0,
+    });
+
+    const pushResult = await env.engine.pushFile("projects/deep/notes/idea.md");
+    expect(pushResult.success).toBe(true);
+    // mkdir should have been called for the parent directory
+    expect(commands.executeCommand).toHaveBeenCalled();
+    expect(commands.buildMkdirCommand).toHaveBeenCalled();
+
+    watcher.dispose();
+    vi.useRealTimers();
+  });
+
+  it("L16: move file from nested subfolder to root", async () => {
+    vi.useFakeTimers();
+    let flushed: WatcherFlush | null = null;
+    const watcher = new FileWatcher(500, async (flush) => { flushed = flush; });
+
+    watcher.onFileRenamed("readme.md", "docs/guides/readme.md");
+
+    await vi.advanceTimersByTimeAsync(600);
+
+    expect(flushed).not.toBeNull();
+    expect(flushed!.changedFiles.has("readme.md")).toBe(true);
+    expect(flushed!.deletedFiles.has("docs/guides/readme.md")).toBe(true);
+
+    // For root-level file, pushFile should NOT call mkdir (parentDir is ".")
+    createTestFile(env, "readme.md", "root content");
+    vi.mocked(commands.runRsync).mockResolvedValue({
+      changedFiles: ["readme.md"], deletedFiles: [],
+      stdout: "", stderr: "", exitCode: 0,
+    });
+
+    vi.mocked(commands.buildMkdirCommand).mockClear();
+    const pushResult = await env.engine.pushFile("readme.md");
+    expect(pushResult.success).toBe(true);
+    // No mkdir needed for root
+    expect(commands.buildMkdirCommand).not.toHaveBeenCalled();
+
+    watcher.dispose();
+    vi.useRealTimers();
+  });
+
+  it("L17: move file between two different subfolders", async () => {
+    vi.useFakeTimers();
+    let flushed: WatcherFlush | null = null;
+    const watcher = new FileWatcher(500, async (flush) => { flushed = flush; });
+
+    watcher.onFileRenamed("archive/2026/report.md", "projects/active/report.md");
+
+    await vi.advanceTimersByTimeAsync(600);
+
+    expect(flushed).not.toBeNull();
+    expect(flushed!.changedFiles.has("archive/2026/report.md")).toBe(true);
+    expect(flushed!.deletedFiles.has("projects/active/report.md")).toBe(true);
+
+    watcher.dispose();
+    vi.useRealTimers();
+  });
+
+  it("L18: move file to a new subfolder that doesn't exist yet", async () => {
+    vi.useFakeTimers();
+    let flushed: WatcherFlush | null = null;
+    const watcher = new FileWatcher(500, async (flush) => { flushed = flush; });
+
+    watcher.onFileRenamed("brand-new-folder/spec.md", "spec.md");
+
+    await vi.advanceTimersByTimeAsync(600);
+
+    expect(flushed).not.toBeNull();
+    expect(flushed!.changedFiles.has("brand-new-folder/spec.md")).toBe(true);
+    expect(flushed!.deletedFiles.has("spec.md")).toBe(true);
+
+    // Engine creates the remote dir with mkdir before rsync
+    createTestFile(env, "brand-new-folder/spec.md", "specification");
+    vi.mocked(commands.runRsync).mockResolvedValue({
+      changedFiles: ["brand-new-folder/spec.md"], deletedFiles: [],
+      stdout: "", stderr: "", exitCode: 0,
+    });
+
+    const pushResult = await env.engine.pushFile("brand-new-folder/spec.md");
+    expect(pushResult.success).toBe(true);
+    expect(commands.buildMkdirCommand).toHaveBeenCalled();
+
+    watcher.dispose();
+    vi.useRealTimers();
+  });
+
+  it("L19: create multiple files in same new subfolder rapidly (debounce)", async () => {
+    vi.useFakeTimers();
+    let flushed: WatcherFlush | null = null;
+    let flushCount = 0;
+    const watcher = new FileWatcher(500, async (flush) => { flushed = flush; flushCount++; });
+
+    watcher.onFileChange("new-project/file1.md");
+    await vi.advanceTimersByTimeAsync(50);
+    watcher.onFileChange("new-project/file2.md");
+    await vi.advanceTimersByTimeAsync(50);
+    watcher.onFileChange("new-project/file3.md");
+
+    await vi.advanceTimersByTimeAsync(600);
+
+    expect(flushCount).toBe(1);
+    expect(flushed).not.toBeNull();
+    expect(flushed!.changedFiles.has("new-project/file1.md")).toBe(true);
+    expect(flushed!.changedFiles.has("new-project/file2.md")).toBe(true);
+    expect(flushed!.changedFiles.has("new-project/file3.md")).toBe(true);
+    expect(flushed!.changedFiles.size).toBe(3);
+
+    // Engine: each pushFile call should create the remote dir
+    for (const f of ["new-project/file1.md", "new-project/file2.md", "new-project/file3.md"]) {
+      createTestFile(env, f, `content of ${f}`);
+    }
+    vi.mocked(commands.runRsync).mockResolvedValue({
+      changedFiles: ["new-project/file1.md"], deletedFiles: [],
+      stdout: "", stderr: "", exitCode: 0,
+    });
+    const result = await env.engine.pushFile("new-project/file1.md");
+    expect(result.success).toBe(true);
+    expect(commands.buildMkdirCommand).toHaveBeenCalled();
+
+    watcher.dispose();
+    vi.useRealTimers();
+  });
+
+  it("L20: delete multiple files from different subfolders (debounce)", async () => {
+    vi.useFakeTimers();
+    let flushed: WatcherFlush | null = null;
+    let flushCount = 0;
+    const watcher = new FileWatcher(500, async (flush) => { flushed = flush; flushCount++; });
+
+    watcher.onFileDeleted("notes/meeting.md");
+    await vi.advanceTimersByTimeAsync(50);
+    watcher.onFileDeleted("projects/old-idea.md");
+    await vi.advanceTimersByTimeAsync(50);
+    watcher.onFileDeleted("journal/2025/jan.md");
+
+    await vi.advanceTimersByTimeAsync(600);
+
+    expect(flushCount).toBe(1);
+    expect(flushed).not.toBeNull();
+    expect(flushed!.deletedFiles.has("notes/meeting.md")).toBe(true);
+    expect(flushed!.deletedFiles.has("projects/old-idea.md")).toBe(true);
+    expect(flushed!.deletedFiles.has("journal/2025/jan.md")).toBe(true);
+    expect(flushed!.deletedFiles.size).toBe(3);
+    expect(flushed!.changedFiles.size).toBe(0);
+
+    watcher.dispose();
+    vi.useRealTimers();
+  });
+
+  // L21 (old L14) — already tested above as "L14: delete entire subfolder"
+  // L23 (old L15) — already tested above as "L15: rename folder"
+
+  it("L22: delete deeply nested subfolder tree", async () => {
+    vi.useFakeTimers();
+    let flushed: WatcherFlush | null = null;
+    const watcher = new FileWatcher(500, async (flush) => { flushed = flush; });
+
+    // Files at various depths in a nested tree
+    watcher.onFileDeleted("projects/2026/q1/january/week1/notes.md");
+    watcher.onFileDeleted("projects/2026/q1/january/week2/notes.md");
+    watcher.onFileDeleted("projects/2026/q1/february/plan.md");
+    watcher.onFileDeleted("projects/2026/q1/summary.md");
+
+    await vi.advanceTimersByTimeAsync(600);
+
+    expect(flushed).not.toBeNull();
+    expect(flushed!.deletedFiles.size).toBe(4);
+    expect(flushed!.deletedFiles.has("projects/2026/q1/january/week1/notes.md")).toBe(true);
+    expect(flushed!.deletedFiles.has("projects/2026/q1/january/week2/notes.md")).toBe(true);
+    expect(flushed!.deletedFiles.has("projects/2026/q1/february/plan.md")).toBe(true);
+    expect(flushed!.deletedFiles.has("projects/2026/q1/summary.md")).toBe(true);
+    expect(flushed!.changedFiles.size).toBe(0);
+
+    watcher.dispose();
+    vi.useRealTimers();
+  });
+
+  it("L24: rename folder with many files (30 renames in debounce window)", async () => {
+    vi.useFakeTimers();
+    let flushed: WatcherFlush | null = null;
+    const watcher = new FileWatcher(500, async (flush) => { flushed = flush; });
+
+    // Simulate renaming a folder with 30 files: old-folder → new-folder
+    for (let i = 1; i <= 30; i++) {
+      watcher.onFileRenamed(`new-folder/file${i}.md`, `old-folder/file${i}.md`);
+    }
+
+    await vi.advanceTimersByTimeAsync(600);
+
+    expect(flushed).not.toBeNull();
+    expect(flushed!.changedFiles.size).toBe(30);
+    expect(flushed!.deletedFiles.size).toBe(30);
+    for (let i = 1; i <= 30; i++) {
+      expect(flushed!.changedFiles.has(`new-folder/file${i}.md`)).toBe(true);
+      expect(flushed!.deletedFiles.has(`old-folder/file${i}.md`)).toBe(true);
+    }
+
+    watcher.dispose();
+    vi.useRealTimers();
+  });
+
+  it("L25: rename deeply nested folder (2 renames with deep paths)", async () => {
+    vi.useFakeTimers();
+    let flushed: WatcherFlush | null = null;
+    const watcher = new FileWatcher(500, async (flush) => { flushed = flush; });
+
+    watcher.onFileRenamed("a/b/c/new-name/file1.md", "a/b/c/old-name/file1.md");
+    watcher.onFileRenamed("a/b/c/new-name/file2.md", "a/b/c/old-name/file2.md");
+
+    await vi.advanceTimersByTimeAsync(600);
+
+    expect(flushed).not.toBeNull();
+    expect(flushed!.changedFiles.has("a/b/c/new-name/file1.md")).toBe(true);
+    expect(flushed!.changedFiles.has("a/b/c/new-name/file2.md")).toBe(true);
+    expect(flushed!.deletedFiles.has("a/b/c/old-name/file1.md")).toBe(true);
+    expect(flushed!.deletedFiles.has("a/b/c/old-name/file2.md")).toBe(true);
+
+    watcher.dispose();
+    vi.useRealTimers();
+  });
+
+  it("L26: rename parent folder of nested tree (4 renames across sub-levels)", async () => {
+    vi.useFakeTimers();
+    let flushed: WatcherFlush | null = null;
+    const watcher = new FileWatcher(500, async (flush) => { flushed = flush; });
+
+    // Renaming "parent" to "renamed-parent" affects files at multiple sub-levels
+    watcher.onFileRenamed("renamed-parent/file.md", "parent/file.md");
+    watcher.onFileRenamed("renamed-parent/sub1/deep.md", "parent/sub1/deep.md");
+    watcher.onFileRenamed("renamed-parent/sub2/a.md", "parent/sub2/a.md");
+    watcher.onFileRenamed("renamed-parent/sub2/nested/b.md", "parent/sub2/nested/b.md");
+
+    await vi.advanceTimersByTimeAsync(600);
+
+    expect(flushed).not.toBeNull();
+    expect(flushed!.changedFiles.size).toBe(4);
+    expect(flushed!.deletedFiles.size).toBe(4);
+    expect(flushed!.changedFiles.has("renamed-parent/file.md")).toBe(true);
+    expect(flushed!.changedFiles.has("renamed-parent/sub1/deep.md")).toBe(true);
+    expect(flushed!.changedFiles.has("renamed-parent/sub2/a.md")).toBe(true);
+    expect(flushed!.changedFiles.has("renamed-parent/sub2/nested/b.md")).toBe(true);
+    expect(flushed!.deletedFiles.has("parent/file.md")).toBe(true);
+    expect(flushed!.deletedFiles.has("parent/sub1/deep.md")).toBe(true);
+    expect(flushed!.deletedFiles.has("parent/sub2/a.md")).toBe(true);
+    expect(flushed!.deletedFiles.has("parent/sub2/nested/b.md")).toBe(true);
+
+    watcher.dispose();
+    vi.useRealTimers();
+  });
+
+  it("L27: move folder into another folder (2 renames changing parent)", async () => {
+    vi.useFakeTimers();
+    let flushed: WatcherFlush | null = null;
+    const watcher = new FileWatcher(500, async (flush) => { flushed = flush; });
+
+    // Move "src" into "archive": src/a.md → archive/src/a.md
+    watcher.onFileRenamed("archive/src/a.md", "src/a.md");
+    watcher.onFileRenamed("archive/src/b.md", "src/b.md");
+
+    await vi.advanceTimersByTimeAsync(600);
+
+    expect(flushed).not.toBeNull();
+    expect(flushed!.changedFiles.has("archive/src/a.md")).toBe(true);
+    expect(flushed!.changedFiles.has("archive/src/b.md")).toBe(true);
+    expect(flushed!.deletedFiles.has("src/a.md")).toBe(true);
+    expect(flushed!.deletedFiles.has("src/b.md")).toBe(true);
+
+    watcher.dispose();
+    vi.useRealTimers();
+  });
+
+  it("L28: move folder out of a parent (promote up one level)", async () => {
+    vi.useFakeTimers();
+    let flushed: WatcherFlush | null = null;
+    const watcher = new FileWatcher(500, async (flush) => { flushed = flush; });
+
+    // Move "parent/child" up to "child": parent/child/x.md → child/x.md
+    watcher.onFileRenamed("child/x.md", "parent/child/x.md");
+    watcher.onFileRenamed("child/y.md", "parent/child/y.md");
+
+    await vi.advanceTimersByTimeAsync(600);
+
+    expect(flushed).not.toBeNull();
+    expect(flushed!.changedFiles.has("child/x.md")).toBe(true);
+    expect(flushed!.changedFiles.has("child/y.md")).toBe(true);
+    expect(flushed!.deletedFiles.has("parent/child/x.md")).toBe(true);
+    expect(flushed!.deletedFiles.has("parent/child/y.md")).toBe(true);
+
+    watcher.dispose();
+    vi.useRealTimers();
+  });
+
+  it("L29: move folder to vault root (remove all parent dirs)", async () => {
+    vi.useFakeTimers();
+    let flushed: WatcherFlush | null = null;
+    const watcher = new FileWatcher(500, async (flush) => { flushed = flush; });
+
+    // Move "a/b/c" to root: a/b/c/doc.md → doc.md (but folder name preserved)
+    watcher.onFileRenamed("c/doc1.md", "a/b/c/doc1.md");
+    watcher.onFileRenamed("c/doc2.md", "a/b/c/doc2.md");
+
+    await vi.advanceTimersByTimeAsync(600);
+
+    expect(flushed).not.toBeNull();
+    expect(flushed!.changedFiles.has("c/doc1.md")).toBe(true);
+    expect(flushed!.changedFiles.has("c/doc2.md")).toBe(true);
+    expect(flushed!.deletedFiles.has("a/b/c/doc1.md")).toBe(true);
+    expect(flushed!.deletedFiles.has("a/b/c/doc2.md")).toBe(true);
+
+    watcher.dispose();
+    vi.useRealTimers();
+  });
+
+  it("L30: rename folder then immediately rename it again (chain collapse for folder renames)", async () => {
+    vi.useFakeTimers();
+    let flushed: WatcherFlush | null = null;
+    const watcher = new FileWatcher(500, async (flush) => { flushed = flush; });
+
+    // First rename: alpha → beta
+    watcher.onFileRenamed("beta/one.md", "alpha/one.md");
+    watcher.onFileRenamed("beta/two.md", "alpha/two.md");
+
+    // Second rename (within debounce window): beta → gamma
+    watcher.onFileRenamed("gamma/one.md", "beta/one.md");
+    watcher.onFileRenamed("gamma/two.md", "beta/two.md");
+
+    await vi.advanceTimersByTimeAsync(600);
+
+    expect(flushed).not.toBeNull();
+    // Chain collapsed: only alpha (origin) deleted, only gamma (final) pushed
+    expect(flushed!.changedFiles.has("gamma/one.md")).toBe(true);
+    expect(flushed!.changedFiles.has("gamma/two.md")).toBe(true);
+    expect(flushed!.deletedFiles.has("alpha/one.md")).toBe(true);
+    expect(flushed!.deletedFiles.has("alpha/two.md")).toBe(true);
+    // Intermediates should not appear
+    expect(flushed!.changedFiles.has("beta/one.md")).toBe(false);
+    expect(flushed!.changedFiles.has("beta/two.md")).toBe(false);
+    expect(flushed!.deletedFiles.has("beta/one.md")).toBe(false);
+    expect(flushed!.deletedFiles.has("beta/two.md")).toBe(false);
+
+    watcher.dispose();
+    vi.useRealTimers();
+  });
+
+  it("L31: create folder, add files, then rename the folder within debounce window", async () => {
+    vi.useFakeTimers();
+    let flushed: WatcherFlush | null = null;
+    const watcher = new FileWatcher(500, async (flush) => { flushed = flush; });
+
+    // Create files in "draft-folder"
+    watcher.onFileChange("draft-folder/a.md");
+    watcher.onFileChange("draft-folder/b.md");
+
+    // Rename "draft-folder" to "final-folder" within debounce
+    watcher.onFileRenamed("final-folder/a.md", "draft-folder/a.md");
+    watcher.onFileRenamed("final-folder/b.md", "draft-folder/b.md");
+
+    await vi.advanceTimersByTimeAsync(600);
+
+    expect(flushed).not.toBeNull();
+    // The final names should be in changedFiles
+    expect(flushed!.changedFiles.has("final-folder/a.md")).toBe(true);
+    expect(flushed!.changedFiles.has("final-folder/b.md")).toBe(true);
+    // The draft names should NOT be in changedFiles (they were the create targets, now renamed)
+    expect(flushed!.changedFiles.has("draft-folder/a.md")).toBe(false);
+    expect(flushed!.changedFiles.has("draft-folder/b.md")).toBe(false);
+    // The draft names are the rename origin — but they were created new (no pre-existing remote),
+    // so the watcher records them as the origin in the rename chain.
+    // Since they were initially created (onFileChange) then renamed away, the rename
+    // origin (draft-folder/*) gets added to deletedFiles.
+    // But they never existed on remote so the delete will be a no-op on the engine side.
+
+    watcher.dispose();
+    vi.useRealTimers();
+  });
+
+  it("L32: create empty folder (no files) — no watcher events, no sync", async () => {
+    vi.useFakeTimers();
+    let flushCount = 0;
+    const watcher = new FileWatcher(500, async () => { flushCount++; });
+
+    // Empty folder creation produces no file events in Obsidian's vault API
+    // (Obsidian only watches files, not directories)
+    // So we simply don't call any watcher methods
+
+    await vi.advanceTimersByTimeAsync(600);
+
+    expect(flushCount).toBe(0);
+    expect(watcher.hasPending()).toBe(false);
+
+    watcher.dispose();
+    vi.useRealTimers();
+  });
+
+  it("L33: rename folder with spaces and special characters (escaping)", async () => {
+    vi.useFakeTimers();
+    let flushed: WatcherFlush | null = null;
+    const watcher = new FileWatcher(500, async (flush) => { flushed = flush; });
+
+    watcher.onFileRenamed("my folder (2026)/notes & ideas.md", "old name [draft]/notes & ideas.md");
+    watcher.onFileRenamed("my folder (2026)/résumé.md", "old name [draft]/résumé.md");
+
+    await vi.advanceTimersByTimeAsync(600);
+
+    expect(flushed).not.toBeNull();
+    expect(flushed!.changedFiles.has("my folder (2026)/notes & ideas.md")).toBe(true);
+    expect(flushed!.changedFiles.has("my folder (2026)/résumé.md")).toBe(true);
+    expect(flushed!.deletedFiles.has("old name [draft]/notes & ideas.md")).toBe(true);
+    expect(flushed!.deletedFiles.has("old name [draft]/résumé.md")).toBe(true);
+
+    // Verify engine handles special chars in paths
+    createTestFile(env, "my folder (2026)/notes & ideas.md", "content with special chars");
+    vi.mocked(commands.runRsync).mockResolvedValue({
+      changedFiles: ["my folder (2026)/notes & ideas.md"], deletedFiles: [],
+      stdout: "", stderr: "", exitCode: 0,
+    });
+    const pushResult = await env.engine.pushFile("my folder (2026)/notes & ideas.md");
+    expect(pushResult.success).toBe(true);
+    // mkdir should have been called with the special-char path
+    expect(commands.buildMkdirCommand).toHaveBeenCalled();
+
+    watcher.dispose();
+    vi.useRealTimers();
+  });
+
+  it("L34: delete folder then recreate with same name and different files", async () => {
+    vi.useFakeTimers();
+    let flushed: WatcherFlush | null = null;
+    const watcher = new FileWatcher(500, async (flush) => { flushed = flush; });
+
+    // Delete old files
+    watcher.onFileDeleted("recycled/old1.md");
+    watcher.onFileDeleted("recycled/old2.md");
+
+    // Recreate folder with new files (same folder name)
+    await vi.advanceTimersByTimeAsync(100);
+    watcher.onFileChange("recycled/new1.md");
+    watcher.onFileChange("recycled/new2.md");
+    watcher.onFileChange("recycled/new3.md");
+
+    await vi.advanceTimersByTimeAsync(600);
+
+    expect(flushed).not.toBeNull();
+    // Old files should be deleted
+    expect(flushed!.deletedFiles.has("recycled/old1.md")).toBe(true);
+    expect(flushed!.deletedFiles.has("recycled/old2.md")).toBe(true);
+    // New files should be changed
+    expect(flushed!.changedFiles.has("recycled/new1.md")).toBe(true);
+    expect(flushed!.changedFiles.has("recycled/new2.md")).toBe(true);
+    expect(flushed!.changedFiles.has("recycled/new3.md")).toBe(true);
+
+    watcher.dispose();
+    vi.useRealTimers();
+  });
+
+  it("L35: move multiple files from different folders into one new folder", async () => {
+    vi.useFakeTimers();
+    let flushed: WatcherFlush | null = null;
+    const watcher = new FileWatcher(500, async (flush) => { flushed = flush; });
+
+    // Files from 3 different source folders → single target folder
+    watcher.onFileRenamed("collected/from-notes.md", "notes/from-notes.md");
+    watcher.onFileRenamed("collected/from-journal.md", "journal/from-journal.md");
+    watcher.onFileRenamed("collected/from-projects.md", "projects/from-projects.md");
+
+    await vi.advanceTimersByTimeAsync(600);
+
+    expect(flushed).not.toBeNull();
+    // All 3 new paths in changed
+    expect(flushed!.changedFiles.has("collected/from-notes.md")).toBe(true);
+    expect(flushed!.changedFiles.has("collected/from-journal.md")).toBe(true);
+    expect(flushed!.changedFiles.has("collected/from-projects.md")).toBe(true);
+    // All 3 old paths in deleted
+    expect(flushed!.deletedFiles.has("notes/from-notes.md")).toBe(true);
+    expect(flushed!.deletedFiles.has("journal/from-journal.md")).toBe(true);
+    expect(flushed!.deletedFiles.has("projects/from-projects.md")).toBe(true);
+
+    watcher.dispose();
+    vi.useRealTimers();
+  });
+
+  it("L36: move file and edit it simultaneously (rename + modify within debounce)", async () => {
+    vi.useFakeTimers();
+    let flushed: WatcherFlush | null = null;
+    const watcher = new FileWatcher(500, async (flush) => { flushed = flush; });
+
+    // Rename the file
+    watcher.onFileRenamed("archive/doc.md", "active/doc.md");
+    // Then edit it at the new location
+    await vi.advanceTimersByTimeAsync(50);
+    watcher.onFileChange("archive/doc.md");
+
+    await vi.advanceTimersByTimeAsync(600);
+
+    expect(flushed).not.toBeNull();
+    // The new path should be in changed (both rename target and edit)
+    expect(flushed!.changedFiles.has("archive/doc.md")).toBe(true);
+    // The old path should be in deleted
+    expect(flushed!.deletedFiles.has("active/doc.md")).toBe(true);
+
+    watcher.dispose();
+    vi.useRealTimers();
+  });
+
+  it("L37: scatter files from one folder into multiple folders (3 renames to 3 targets)", async () => {
+    vi.useFakeTimers();
+    let flushed: WatcherFlush | null = null;
+    const watcher = new FileWatcher(500, async (flush) => { flushed = flush; });
+
+    // Scatter 3 files from "inbox" into 3 different folders
+    watcher.onFileRenamed("notes/task1.md", "inbox/task1.md");
+    watcher.onFileRenamed("projects/task2.md", "inbox/task2.md");
+    watcher.onFileRenamed("archive/task3.md", "inbox/task3.md");
+
+    await vi.advanceTimersByTimeAsync(600);
+
+    expect(flushed).not.toBeNull();
+    expect(flushed!.changedFiles.has("notes/task1.md")).toBe(true);
+    expect(flushed!.changedFiles.has("projects/task2.md")).toBe(true);
+    expect(flushed!.changedFiles.has("archive/task3.md")).toBe(true);
+    expect(flushed!.deletedFiles.has("inbox/task1.md")).toBe(true);
+    expect(flushed!.deletedFiles.has("inbox/task2.md")).toBe(true);
+    expect(flushed!.deletedFiles.has("inbox/task3.md")).toBe(true);
+
+    watcher.dispose();
+    vi.useRealTimers();
+  });
+
+  it("L38: create file at depth 10+ levels (pushFile with very deep mkdir)", async () => {
+    const deepPath = "a/b/c/d/e/f/g/h/i/j/k/deep-note.md";
+    createTestFile(env, deepPath, "very deep content");
+    vi.mocked(commands.runRsync).mockResolvedValue({
+      changedFiles: [deepPath], deletedFiles: [],
+      stdout: "", stderr: "", exitCode: 0,
+    });
+
+    const result = await env.engine.pushFile(deepPath);
+
+    expect(result.success).toBe(true);
+    expect(commands.buildMkdirCommand).toHaveBeenCalled();
+    expect(env.engine.getManifest().getEntry(deepPath)).toBeDefined();
+  });
+
+  it("L39: rename file within same subfolder (rename without dir change)", async () => {
+    vi.useFakeTimers();
+    let flushed: WatcherFlush | null = null;
+    const watcher = new FileWatcher(500, async (flush) => { flushed = flush; });
+
+    watcher.onFileRenamed("notes/new-title.md", "notes/old-title.md");
+
+    await vi.advanceTimersByTimeAsync(600);
+
+    expect(flushed).not.toBeNull();
+    expect(flushed!.changedFiles.has("notes/new-title.md")).toBe(true);
+    expect(flushed!.deletedFiles.has("notes/old-title.md")).toBe(true);
+    // Only 1 rename, so 1 changed + 1 deleted
+    expect(flushed!.changedFiles.size).toBe(1);
+    expect(flushed!.deletedFiles.size).toBe(1);
+
+    watcher.dispose();
+    vi.useRealTimers();
+  });
+
+  it("L40: rename file changing only case", async () => {
+    vi.useFakeTimers();
+    let flushed: WatcherFlush | null = null;
+    const watcher = new FileWatcher(500, async (flush) => { flushed = flush; });
+
+    watcher.onFileRenamed("notes/README.md", "notes/readme.md");
+
+    await vi.advanceTimersByTimeAsync(600);
+
+    expect(flushed).not.toBeNull();
+    expect(flushed!.changedFiles.has("notes/README.md")).toBe(true);
+    expect(flushed!.deletedFiles.has("notes/readme.md")).toBe(true);
+
+    // Engine: push the new name, delete the old name
+    createTestFile(env, "notes/README.md", "readme content");
+    vi.mocked(commands.runRsync).mockResolvedValue({
+      changedFiles: ["notes/README.md"], deletedFiles: [],
+      stdout: "", stderr: "", exitCode: 0,
+    });
+    const pushResult = await env.engine.pushFile("notes/README.md");
+    expect(pushResult.success).toBe(true);
+
+    const deleteResult = await env.engine.deleteRemoteFile("notes/readme.md");
+    expect(deleteResult.success).toBe(true);
+
+    watcher.dispose();
+    vi.useRealTimers();
+  });
+
+  it("L41: rename file changing extension", async () => {
+    vi.useFakeTimers();
+    let flushed: WatcherFlush | null = null;
+    const watcher = new FileWatcher(500, async (flush) => { flushed = flush; });
+
+    watcher.onFileRenamed("notes/document.txt", "notes/document.md");
+
+    await vi.advanceTimersByTimeAsync(600);
+
+    expect(flushed).not.toBeNull();
+    expect(flushed!.changedFiles.has("notes/document.txt")).toBe(true);
+    expect(flushed!.deletedFiles.has("notes/document.md")).toBe(true);
+
+    // Engine: push the new extension, delete the old one
+    createTestFile(env, "notes/document.txt", "plain text content");
+    vi.mocked(commands.runRsync).mockResolvedValue({
+      changedFiles: ["notes/document.txt"], deletedFiles: [],
+      stdout: "", stderr: "", exitCode: 0,
+    });
+    const pushResult = await env.engine.pushFile("notes/document.txt");
+    expect(pushResult.success).toBe(true);
+
+    const deleteResult = await env.engine.deleteRemoteFile("notes/document.md");
+    expect(deleteResult.success).toBe(true);
+
+    watcher.dispose();
+    vi.useRealTimers();
+  });
 });

@@ -166,4 +166,224 @@ describe("Remote Changes → Local", () => {
     expect(deleteEffect!.files).toContain("old-project/readme.md");
     expect(deleteEffect!.files).toContain("old-project/notes.md");
   });
+
+  it("R11: file moved between folders on VPS — delete old, pull new", () => {
+    const manifest = {
+      "inbox/idea.md": makeManifestEntry("inbox/idea.md", { lastSyncedMtime: 1000 }),
+    };
+    const localMtimes = new Map([["inbox/idea.md", 1000]]);
+
+    const decision = decidePullAction(
+      idleState(),
+      { changedFiles: ["notes/idea.md"], deletedFiles: ["inbox/idea.md"] },
+      manifest,
+      config,
+      new Set(),
+      localMtimes
+    );
+    expect(decision.effects.some((e) => e.type === "pullWithoutDelete")).toBe(true);
+    const deleteEffect = findEffect(decision.effects, "deleteLocalFiles");
+    expect(deleteEffect).toBeDefined();
+    expect(deleteEffect!.files).toContain("inbox/idea.md");
+  });
+
+  it("R12: deeply nested files added on VPS — pull effect produced", () => {
+    const decision = decidePullAction(
+      idleState(),
+      { changedFiles: ["a/b/c/d/deep-note.md"], deletedFiles: [] },
+      {},
+      config,
+      new Set(),
+      new Map()
+    );
+    expect(decision.effects.some((e) => e.type === "pullWithoutDelete")).toBe(true);
+    expect(decision.effects.some((e) => e.type === "notify")).toBe(true);
+  });
+
+  it("R13: file renamed within same subfolder on VPS — delete old, pull new", () => {
+    const manifest = {
+      "docs/old-name.md": makeManifestEntry("docs/old-name.md", { lastSyncedMtime: 1000 }),
+    };
+    const localMtimes = new Map([["docs/old-name.md", 1000]]);
+
+    const decision = decidePullAction(
+      idleState(),
+      { changedFiles: ["docs/new-name.md"], deletedFiles: ["docs/old-name.md"] },
+      manifest,
+      config,
+      new Set(),
+      localMtimes
+    );
+    expect(decision.effects.some((e) => e.type === "pullWithoutDelete")).toBe(true);
+    const deleteEffect = findEffect(decision.effects, "deleteLocalFiles");
+    expect(deleteEffect).toBeDefined();
+    expect(deleteEffect!.files).toContain("docs/old-name.md");
+  });
+
+  it("R14: multiple subfolders created simultaneously on VPS — single poll", () => {
+    const decision = decidePullAction(
+      idleState(),
+      {
+        changedFiles: [
+          "projects/alpha/readme.md",
+          "projects/beta/readme.md",
+          "projects/gamma/readme.md",
+        ],
+        deletedFiles: [],
+      },
+      {},
+      config,
+      new Set(),
+      new Map()
+    );
+    expect(decision.effects.some((e) => e.type === "pullWithoutDelete")).toBe(true);
+    expect(decision.effects.some((e) => e.type === "notify")).toBe(true);
+  });
+
+  it("R15: file moved from deep path to root on VPS — delete deep, pull root", () => {
+    const manifest = {
+      "a/b/c/deep.md": makeManifestEntry("a/b/c/deep.md", { lastSyncedMtime: 1000 }),
+    };
+    const localMtimes = new Map([["a/b/c/deep.md", 1000]]);
+
+    const decision = decidePullAction(
+      idleState(),
+      { changedFiles: ["deep.md"], deletedFiles: ["a/b/c/deep.md"] },
+      manifest,
+      config,
+      new Set(),
+      localMtimes
+    );
+    expect(decision.effects.some((e) => e.type === "pullWithoutDelete")).toBe(true);
+    const deleteEffect = findEffect(decision.effects, "deleteLocalFiles");
+    expect(deleteEffect).toBeDefined();
+    expect(deleteEffect!.files).toContain("a/b/c/deep.md");
+  });
+
+  it("R16: folder renamed on VPS — all files show as delete+create", () => {
+    const manifest = {
+      "old-folder/file1.md": makeManifestEntry("old-folder/file1.md", { lastSyncedMtime: 1000 }),
+      "old-folder/file2.md": makeManifestEntry("old-folder/file2.md", { lastSyncedMtime: 1000 }),
+    };
+    const localMtimes = new Map([
+      ["old-folder/file1.md", 1000],
+      ["old-folder/file2.md", 1000],
+    ]);
+
+    const decision = decidePullAction(
+      idleState(),
+      {
+        changedFiles: ["new-folder/file1.md", "new-folder/file2.md"],
+        deletedFiles: ["old-folder/file1.md", "old-folder/file2.md"],
+      },
+      manifest,
+      config,
+      new Set(),
+      localMtimes
+    );
+    expect(decision.effects.some((e) => e.type === "pullWithoutDelete")).toBe(true);
+    const deleteEffect = findEffect(decision.effects, "deleteLocalFiles");
+    expect(deleteEffect).toBeDefined();
+    expect(deleteEffect!.files).toContain("old-folder/file1.md");
+    expect(deleteEffect!.files).toContain("old-folder/file2.md");
+  });
+
+  it("R17: partial subfolder deletion on VPS — only deleted file removed", () => {
+    const manifest = {
+      "shared/a.md": makeManifestEntry("shared/a.md", { lastSyncedMtime: 1000 }),
+      "shared/b.md": makeManifestEntry("shared/b.md", { lastSyncedMtime: 1000 }),
+      "shared/c.md": makeManifestEntry("shared/c.md", { lastSyncedMtime: 1000 }),
+    };
+    const localMtimes = new Map([
+      ["shared/a.md", 1000],
+      ["shared/b.md", 1000],
+      ["shared/c.md", 1000],
+    ]);
+
+    const decision = decidePullAction(
+      idleState(),
+      { changedFiles: [], deletedFiles: ["shared/b.md"] },
+      manifest,
+      config,
+      new Set(),
+      localMtimes
+    );
+    const deleteEffect = findEffect(decision.effects, "deleteLocalFiles");
+    expect(deleteEffect).toBeDefined();
+    expect(deleteEffect!.files).toContain("shared/b.md");
+    expect(deleteEffect!.files).not.toContain("shared/a.md");
+    expect(deleteEffect!.files).not.toContain("shared/c.md");
+  });
+
+  it("R18: binary file added in new subfolder on VPS — pull effect produced", () => {
+    const decision = decidePullAction(
+      idleState(),
+      { changedFiles: ["assets/images/photo.png"], deletedFiles: [] },
+      {},
+      config,
+      new Set(),
+      new Map()
+    );
+    expect(decision.effects.some((e) => e.type === "pullWithoutDelete")).toBe(true);
+    expect(decision.effects.some((e) => e.type === "notify")).toBe(true);
+  });
+
+  it("R19: entire nested tree restructured on VPS — deletes from v1, creates in v2", () => {
+    const manifest = {
+      "v1/docs/guide.md": makeManifestEntry("v1/docs/guide.md", { lastSyncedMtime: 1000 }),
+      "v1/docs/api.md": makeManifestEntry("v1/docs/api.md", { lastSyncedMtime: 1000 }),
+      "v1/src/main.ts": makeManifestEntry("v1/src/main.ts", { lastSyncedMtime: 1000 }),
+    };
+    const localMtimes = new Map([
+      ["v1/docs/guide.md", 1000],
+      ["v1/docs/api.md", 1000],
+      ["v1/src/main.ts", 1000],
+    ]);
+
+    const decision = decidePullAction(
+      idleState(),
+      {
+        changedFiles: ["v2/docs/guide.md", "v2/docs/api.md", "v2/src/main.ts"],
+        deletedFiles: ["v1/docs/guide.md", "v1/docs/api.md", "v1/src/main.ts"],
+      },
+      manifest,
+      config,
+      new Set(),
+      localMtimes
+    );
+    expect(decision.effects.some((e) => e.type === "pullWithoutDelete")).toBe(true);
+    const deleteEffect = findEffect(decision.effects, "deleteLocalFiles");
+    expect(deleteEffect).toBeDefined();
+    expect(deleteEffect!.files).toContain("v1/docs/guide.md");
+    expect(deleteEffect!.files).toContain("v1/docs/api.md");
+    expect(deleteEffect!.files).toContain("v1/src/main.ts");
+  });
+
+  it("R20: empty subfolder added on VPS — no file changes, no-op", () => {
+    const decision = decidePullAction(
+      idleState(),
+      { changedFiles: [], deletedFiles: [] },
+      {},
+      config,
+      new Set(),
+      new Map()
+    );
+    expect(decision.state.status).toBe("idle");
+    expect(decision.effects.some((e) => e.type === "pullWithoutDelete")).toBe(false);
+    expect(decision.effects.some((e) => e.type === "deleteLocalFiles")).toBe(false);
+  });
+
+  it("R21: multiple levels of empty directories on VPS — no file changes, no-op", () => {
+    const decision = decidePullAction(
+      idleState(),
+      { changedFiles: [], deletedFiles: [] },
+      {},
+      config,
+      new Set(),
+      new Map()
+    );
+    expect(decision.state.status).toBe("idle");
+    expect(decision.effects.some((e) => e.type === "pullWithoutDelete")).toBe(false);
+    expect(decision.effects.some((e) => e.type === "deleteLocalFiles")).toBe(false);
+  });
 });
