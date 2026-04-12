@@ -89,4 +89,6 @@ jobs:
           gh release create "v${VERSION}" \
             --title "v${VERSION}" \
             --notes "$RELEASE_NOTES" \
-            "obsidian-ssh-sync-v${VERSION}.zip"
+            "obsidian-ssh-sync-v${VERSION}.zip" \
+            artifact/main.js \
+            artifact/manifest.json
