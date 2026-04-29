@@ -14,6 +14,7 @@ vi.mock("../../src/ssh/commands", () => ({
   buildMkdirCommand: vi.fn(() => "mkdir cmd"),
   buildLsCommand: vi.fn(() => "ls cmd"),
   buildRmCommand: vi.fn(() => "rm cmd"),
+  buildRmdirCommand: vi.fn(() => "rmdir cmd"),
   executeCommand: vi.fn(),
   runRsync: vi.fn(),
 }));

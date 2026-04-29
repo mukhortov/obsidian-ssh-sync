@@ -10,11 +10,12 @@ import {
   decidePullAction,
   decidePollAction,
   decideFlushAction,
+  decideToggleAction,
   createInitialState,
 } from "../../src/sync/coordinator";
-import { DEFAULT_CONFIG, SyncConfig, MIN_POLL_INTERVAL_SECONDS, SUPPRESS_PRE_OP_MS, SUPPRESS_POST_OP_MS } from "../../src/types";
+import { DEFAULT_CONFIG, SyncConfig, MIN_POLL_INTERVAL_SECONDS, SUPPRESS_PRE_OP_MS, SUPPRESS_POST_OP_MS, clampPollInterval } from "../../src/types";
 import { ManifestStore } from "../../src/sync/manifest";
-import { ConflictResolver } from "../../src/sync/conflict";
+import { SyncLog } from "../../src/sync/sync-log";
 
 import { SyncLock } from "../../src/utils/sync-lock";
 import { FileWatcher, WatcherFlush } from "../../src/sync/watcher";
@@ -27,6 +28,7 @@ vi.mock("../../src/ssh/commands", () => ({
   buildMkdirCommand: vi.fn(() => "mkdir cmd"),
   buildLsCommand: vi.fn(() => "ls cmd"),
   buildRmCommand: vi.fn(() => "rm cmd"),
+  buildRmdirCommand: vi.fn(() => "rmdir cmd"),
   executeCommand: vi.fn(),
   runRsync: vi.fn(),
 }));
@@ -69,17 +71,18 @@ describe("Edge Cases & Error Handling", () => {
     expect(result.error).toContain("timed out");
   });
 
-  it("E3: file with spaces in path — command includes quoted path", () => {
-    const cmd = commands.buildRsyncPushCommand({
-      localPath: "/local/vault",
-      sshHost: "user@host",
-      remotePath: "/remote/vault",
-      relativePath: "my notes/hello world.md",
+  it("E3: file with spaces in path — passed through to command builder", async () => {
+    vi.mocked(commands.runRsync).mockResolvedValue({
+      changedFiles: ["my notes/hello world.md"], deletedFiles: [], stdout: "", stderr: "", exitCode: 0,
     });
-    // The actual mock returns a static string, so test the real function
-    // by calling it directly (the mock won't help here).
-    // This test verifies the command builder handles spaces via quoting.
-    expect(cmd).toBeDefined(); // mocked — real test is in commands.test.ts
+    vi.mocked(commands.executeCommand).mockResolvedValue({ stdout: "", stderr: "", exitCode: 0 });
+    await createTestFile(env, "my notes/hello world.md", "content with spaces");
+    await env.engine.pushFile("my notes/hello world.md");
+    expect(commands.buildRsyncPushCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        relativePath: "my notes/hello world.md",
+      })
+    );
   });
 
   it("E4: excluded file not in rsync transfer", async () => {
@@ -160,9 +163,9 @@ describe("Edge Cases & Error Handling", () => {
 
     expect(resultA.success).toBe(true);
     expect(resultB.success).toBe(false);
-    expect(env.engine.getManifest().getEntry("a.md")).toBeDefined();
+    expect(env.engine._manifest.getEntry("a.md")).toBeDefined();
     // b.md manifest not updated since push failed
-    expect(env.engine.getManifest().getEntry("b.md")).toBeUndefined();
+    expect(env.engine._manifest.getEntry("b.md")).toBeUndefined();
   });
 
   it("E11: very large file sync — rsync timeout", async () => {
@@ -189,7 +192,7 @@ describe("Edge Cases & Error Handling", () => {
 
     const result = await env.engine.pushFile(specialPath);
     expect(result.success).toBe(true);
-    expect(env.engine.getManifest().getEntry(specialPath)).toBeDefined();
+    expect(env.engine._manifest.getEntry(specialPath)).toBeDefined();
 
     // Verify the command builder received the special-char path
     expect(commands.buildRsyncPushCommand).toHaveBeenCalledWith(
@@ -234,7 +237,7 @@ describe("Edge Cases & Error Handling", () => {
     const result = await env.engine.pushFile("secret.md");
     expect(result.success).toBe(false);
     expect(result.error).toContain("Permission denied");
-    expect(env.engine.getManifest().getEntry("secret.md")).toBeUndefined();
+    expect(env.engine._manifest.getEntry("secret.md")).toBeUndefined();
   });
 
   it("E15: disk full on remote", async () => {
@@ -246,7 +249,7 @@ describe("Edge Cases & Error Handling", () => {
 
     const result = await env.engine.pushFile("big.md");
     expect(result.success).toBe(false);
-    expect(env.engine.getManifest().getEntry("big.md")).toBeUndefined();
+    expect(env.engine._manifest.getEntry("big.md")).toBeUndefined();
   });
 
   it("E16: disk full on local (pull failure)", async () => {
@@ -294,13 +297,13 @@ describe("Edge Cases & Error Handling", () => {
     // Write invalid JSON to log file
     fs.writeFileSync(logPath, "not valid json{{{");
 
-    const resolver = new ConflictResolver(tmpDir, logPath);
-    expect(resolver.getLogs()).toEqual([]);
+    const syncLog = new SyncLog(logPath);
+    expect(syncLog.getEntries()).toEqual([]);
 
-    // Verify addLog still works after corruption recovery
-    resolver.addLog({ type: "push", path: "test.md", message: "test entry" });
-    expect(resolver.getLogs()).toHaveLength(1);
-    expect(resolver.getLogs()[0].path).toBe("test.md");
+    // Verify append still works after corruption recovery
+    syncLog.append({ type: "push", path: "test.md", message: "test entry" });
+    expect(syncLog.getEntries()).toHaveLength(1);
+    expect(syncLog.getEntries()[0].path).toBe("test.md");
 
     // Clean up
     fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -355,7 +358,7 @@ describe("Edge Cases & Error Handling", () => {
 
     const result = await env.engine.pushFile(unicodePath);
     expect(result.success).toBe(true);
-    expect(env.engine.getManifest().getEntry(unicodePath)).toBeDefined();
+    expect(env.engine._manifest.getEntry(unicodePath)).toBeDefined();
   });
 
   it("E23: very long folder path", async () => {
@@ -375,7 +378,7 @@ describe("Edge Cases & Error Handling", () => {
 
     const result = await env.engine.pushFile(longPath);
     expect(result.success).toBe(true);
-    expect(env.engine.getManifest().getEntry(longPath)).toBeDefined();
+    expect(env.engine._manifest.getEntry(longPath)).toBeDefined();
   });
 
   it("E24: hidden folder (.hidden/secret.md)", async () => {
@@ -392,7 +395,7 @@ describe("Edge Cases & Error Handling", () => {
     expect(commands.buildRsyncPushCommand).toHaveBeenCalledWith(
       expect.objectContaining({ relativePath: hiddenPath })
     );
-    expect(env.engine.getManifest().getEntry(hiddenPath)).toBeDefined();
+    expect(env.engine._manifest.getEntry(hiddenPath)).toBeDefined();
   });
 
   it("E25: folder name collision with trailing spaces", async () => {
@@ -417,8 +420,8 @@ describe("Edge Cases & Error Handling", () => {
     expect(resultA.success).toBe(true);
     expect(resultB.success).toBe(true);
     // Both are tracked independently in manifest
-    expect(env.engine.getManifest().getEntry(pathA)).toBeDefined();
-    expect(env.engine.getManifest().getEntry(pathB)).toBeDefined();
+    expect(env.engine._manifest.getEntry(pathA)).toBeDefined();
+    expect(env.engine._manifest.getEntry(pathB)).toBeDefined();
   });
 
   it("E26: delete from subfolder on VPS while local adds to same subfolder — poll skipped", () => {
@@ -566,8 +569,8 @@ describe("Edge Cases & Error Handling", () => {
 
     expect(resultMd.success).toBe(true);
     expect(resultPng.success).toBe(true);
-    expect(env.engine.getManifest().getEntry(mdPath)).toBeDefined();
-    expect(env.engine.getManifest().getEntry(pngPath)).toBeDefined();
+    expect(env.engine._manifest.getEntry(mdPath)).toBeDefined();
+    expect(env.engine._manifest.getEntry(pngPath)).toBeDefined();
   });
 
   it("E33: pushFile rejects directory paths — returns error without calling rsync", async () => {
@@ -810,66 +813,187 @@ describe("Edge Cases & Error Handling", () => {
   });
 
   it("E48: poll interval clamped to minimum", () => {
-    // Test the Poller class accepts the interval it's given
-    // (The clamping happens in main.ts via Math.max(value, MIN_POLL_INTERVAL_SECONDS))
-    const polls: number[] = [];
-    const poller = new Poller(async () => { polls.push(Date.now()); }, MIN_POLL_INTERVAL_SECONDS * 1000);
-
-    // Verify the poller stores and uses the interval
-    // We can't directly access intervalMs, but we can verify updateInterval works
-    poller.updateInterval(10000);
-    // Just verify it doesn't throw — the actual clamping is in main.ts
-    poller.stop();
-
-    // Test the clamping logic directly (same as in main.ts)
-    const MIN = MIN_POLL_INTERVAL_SECONDS;
-    expect(Math.max(1, MIN)).toBe(MIN);
-    expect(Math.max(3, MIN)).toBe(MIN);
-    expect(Math.max(MIN, MIN)).toBe(MIN);
-    expect(Math.max(10, MIN)).toBe(10);
-    expect(Math.max(60, MIN)).toBe(60);
-    expect(Math.max(0, MIN)).toBe(MIN);
-    expect(Math.max(-1, MIN)).toBe(MIN);
+    expect(clampPollInterval("1")).toBe(MIN_POLL_INTERVAL_SECONDS);
+    expect(clampPollInterval("3")).toBe(MIN_POLL_INTERVAL_SECONDS);
+    expect(clampPollInterval(String(MIN_POLL_INTERVAL_SECONDS))).toBe(MIN_POLL_INTERVAL_SECONDS);
+    expect(clampPollInterval("10")).toBe(10);
+    expect(clampPollInterval("60")).toBe(60);
+    expect(clampPollInterval("0")).toBe(MIN_POLL_INTERVAL_SECONDS);
+    expect(clampPollInterval("-1")).toBe(MIN_POLL_INTERVAL_SECONDS);
   });
 
   it("E49: settings validation rejects poll intervals below minimum", () => {
-    // Simulates the settings validation logic from settings.ts
-    const isValidInterval = (value: string): boolean => {
-      const num = parseInt(value, 10);
-      return !isNaN(num) && num >= MIN_POLL_INTERVAL_SECONDS;
-    };
-
-    expect(isValidInterval("1")).toBe(false);
-    expect(isValidInterval("2")).toBe(false);
-    expect(isValidInterval("4")).toBe(false);
-    expect(isValidInterval(String(MIN_POLL_INTERVAL_SECONDS))).toBe(true);
-    expect(isValidInterval("10")).toBe(true);
-    expect(isValidInterval("60")).toBe(true);
-    expect(isValidInterval("0")).toBe(false);
-    expect(isValidInterval("-1")).toBe(false);
-    expect(isValidInterval("abc")).toBe(false);
-    expect(isValidInterval("")).toBe(false);
+    // Values below minimum are clamped
+    expect(clampPollInterval("1")).toBe(MIN_POLL_INTERVAL_SECONDS);
+    expect(clampPollInterval("2")).toBe(MIN_POLL_INTERVAL_SECONDS);
+    expect(clampPollInterval("4")).toBe(MIN_POLL_INTERVAL_SECONDS);
+    // Valid values pass through
+    expect(clampPollInterval(String(MIN_POLL_INTERVAL_SECONDS))).toBe(MIN_POLL_INTERVAL_SECONDS);
+    expect(clampPollInterval("10")).toBe(10);
+    expect(clampPollInterval("60")).toBe(60);
+    // Invalid strings clamp to minimum
+    expect(clampPollInterval("abc")).toBe(MIN_POLL_INTERVAL_SECONDS);
+    expect(clampPollInterval("")).toBe(MIN_POLL_INTERVAL_SECONDS);
   });
 
   it("E50: invalid poll interval falls back to minimum, not last saved value", () => {
-    // Simulates the blur handler behavior: invalid values clamp to MIN,
-    // not the previously saved value
-    const clampInterval = (input: string): number => {
-      const num = parseInt(input, 10);
-      if (isNaN(num) || num < MIN_POLL_INTERVAL_SECONDS) {
-        return MIN_POLL_INTERVAL_SECONDS;
-      }
-      return num;
-    };
+    expect(clampPollInterval("abc")).toBe(MIN_POLL_INTERVAL_SECONDS);
+    expect(clampPollInterval("")).toBe(MIN_POLL_INTERVAL_SECONDS);
+    expect(clampPollInterval("-10")).toBe(MIN_POLL_INTERVAL_SECONDS);
+    expect(clampPollInterval("0")).toBe(MIN_POLL_INTERVAL_SECONDS);
+    expect(clampPollInterval("3")).toBe(MIN_POLL_INTERVAL_SECONDS);
+    // Valid values return as-is
+    expect(clampPollInterval("10")).toBe(10);
+    expect(clampPollInterval("60")).toBe(60);
+  });
 
-    expect(clampInterval("1")).toBe(MIN_POLL_INTERVAL_SECONDS);
-    expect(clampInterval("0")).toBe(MIN_POLL_INTERVAL_SECONDS);
-    expect(clampInterval("-10")).toBe(MIN_POLL_INTERVAL_SECONDS);
-    expect(clampInterval("abc")).toBe(MIN_POLL_INTERVAL_SECONDS);
-    expect(clampInterval("")).toBe(MIN_POLL_INTERVAL_SECONDS);
-    expect(clampInterval("3")).toBe(MIN_POLL_INTERVAL_SECONDS);
-    expect(clampInterval(String(MIN_POLL_INTERVAL_SECONDS))).toBe(MIN_POLL_INTERVAL_SECONDS);
-    expect(clampInterval("10")).toBe(10);
-    expect(clampInterval("60")).toBe(60);
+  it("E51: sync log capped at 200 entries (SL1)", async () => {
+    const logPath = path.join(env.vaultPath, "sync-log.json");
+    const syncLog = new SyncLog(logPath);
+
+    // Append 201 entries
+    for (let i = 0; i < 201; i++) {
+      await syncLog.append({ type: "push", path: `file-${i}.md`, message: `push file-${i}` });
+    }
+
+    // Re-read from disk to verify persistence
+    const raw = JSON.parse(fs.readFileSync(logPath, "utf-8"));
+    expect(raw.length).toBe(200);
+    // Oldest entry (file-0.md) should be evicted; newest (file-200.md) kept
+    expect(raw[0].path).toBe("file-1.md");
+    expect(raw[199].path).toBe("file-200.md");
+  });
+
+  it("E52: watcher produces no flush when no events are received (SO1)", async () => {
+    vi.useFakeTimers();
+    const flushCallback = vi.fn();
+    const watcher = new FileWatcher(500, flushCallback);
+
+    // Advance past debounce window without feeding any events
+    await vi.advanceTimersByTimeAsync(5000);
+
+    expect(flushCallback).not.toHaveBeenCalled();
+    expect(watcher.hasPending()).toBe(false);
+
+    watcher.dispose();
+    vi.useRealTimers();
+  });
+
+  it("E53: three concurrent sync triggers queue FIFO (SL2)", async () => {
+    const lock = new SyncLock();
+    const order: string[] = [];
+
+    const op1 = lock.run(async () => {
+      order.push("start:1");
+      await new Promise((r) => setTimeout(r, 10));
+      order.push("end:1");
+    });
+    const op2 = lock.run(async () => {
+      order.push("start:2");
+      await new Promise((r) => setTimeout(r, 10));
+      order.push("end:2");
+    });
+    const op3 = lock.run(async () => {
+      order.push("start:3");
+      await new Promise((r) => setTimeout(r, 10));
+      order.push("end:3");
+    });
+
+    await Promise.all([op1, op2, op3]);
+
+    expect(order).toEqual([
+      "start:1", "end:1",
+      "start:2", "end:2",
+      "start:3", "end:3",
+    ]);
+  });
+
+  it("E54: full sync pushes without --delete before pulling (FS1)", async () => {
+    // Verify fullSync calls pushAllWithoutDelete then pull (ordering invariant)
+    // by checking the coordinator produces fullSync effect (which engine implements as push-then-pull)
+    const state = createInitialState(true);
+    const decision = decideManualSyncAction(state, true);
+    const fullSyncEffect = findEffect(decision.effects, "fullSync");
+    expect(fullSyncEffect).toBeDefined();
+
+    // Verify engine.fullSync implementation: pushAllWithoutDelete delegates to
+    // pushAllInternal(false) which passes deleteFlag=false
+    // Create files and mock transport properly
+    await createTestFile(env, "local.md", "content");
+
+    vi.mocked(commands.runRsync).mockResolvedValue({
+      success: true,
+      exitCode: 0,
+      stdout: "",
+      stderr: "",
+      changedFiles: [],
+      deletedFiles: [],
+    } as any);
+    vi.mocked(commands.executeCommand).mockResolvedValue({ stdout: "", stderr: "", exitCode: 0 });
+
+    await env.engine.fullSync();
+
+    // pushAllWithoutDelete is called first with deleteFlag=false
+    const pushCalls = vi.mocked(commands.buildRsyncPushCommand).mock.calls;
+    expect(pushCalls.length).toBeGreaterThan(0);
+    expect(pushCalls[0][0].deleteFlag).toBe(false);
+
+    // pull is called after with deleteFlag not explicitly false (defaults to true via pull)
+    const pullCalls = vi.mocked(commands.buildRsyncPullCommand).mock.calls;
+    expect(pullCalls.length).toBeGreaterThan(0);
+  });
+
+  it("E55: status transitions idle → syncing → idle (SB1)", () => {
+    const state = createInitialState(true);
+    expect(state.status).toBe("idle");
+
+    // Manual sync transitions to syncing
+    const decision = decideManualSyncAction(state, true);
+    expect(decision.state.status).toBe("syncing");
+    expect(findEffect(decision.effects, "updateStatus")!.status).toBe("syncing");
+
+    // Simulate sync complete: pull with no changes returns to idle
+    const pullDecision = decidePullAction(
+      decision.state,
+      { changedFiles: [], deletedFiles: [] },
+      {},
+      DEFAULT_CONFIG,
+      new Set(),
+      new Map()
+    );
+    expect(pullDecision.state.status).toBe("idle");
+    expect(findEffect(pullDecision.effects, "updateStatus")!.status).toBe("idle");
+  });
+
+  it("E56: error state recovers on next successful sync (SB2)", () => {
+    // Start with error state
+    const errorState = { ...createInitialState(true), status: "error" as const };
+
+    // Next manual sync should transition to syncing
+    const decision = decideManualSyncAction(errorState, true);
+    expect(decision.state.status).toBe("syncing");
+    expect(decision.effects.some((e) => e.type === "fullSync")).toBe(true);
+
+    // After successful sync (pull with no changes), status returns to idle
+    const pullDecision = decidePullAction(
+      decision.state,
+      { changedFiles: [], deletedFiles: [] },
+      {},
+      DEFAULT_CONFIG,
+      new Set(),
+      new Map()
+    );
+    expect(pullDecision.state.status).toBe("idle");
+  });
+
+  it("E57: disabled state shows correct status (SB3)", () => {
+    const decision = decideToggleAction(
+      createInitialState(true),
+      true, // currently enabled → disabling
+      60000
+    );
+    expect(decision.state.status).toBe("disabled");
+    const statusEffect = findEffect(decision.effects, "updateStatus");
+    expect(statusEffect!.status).toBe("disabled");
   });
 });

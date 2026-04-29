@@ -8,6 +8,7 @@ import {
   createInitialState,
 } from "../../src/sync/coordinator";
 import { ConflictResolver } from "../../src/sync/conflict";
+import { SyncLog } from "../../src/sync/sync-log";
 import { DEFAULT_CONFIG, SyncConfig } from "../../src/types";
 import { makeManifestEntry, findEffect, filterEffects } from "../helpers/test-env";
 
@@ -133,13 +134,14 @@ describe("Conflicts", () => {
   });
 
   describe("C4: Conflict backup file naming", () => {
-    it("creates backup with timestamp format", () => {
+    it("creates backup with timestamp format", async () => {
       const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "conflict-test-"));
       const testFile = path.join(tmpDir, "meeting.md");
       fs.writeFileSync(testFile, "local content");
 
-      const resolver = new ConflictResolver(tmpDir, path.join(tmpDir, "log.json"));
-      const resolved = resolver.resolveConflict(
+      const syncLog = new SyncLog(path.join(tmpDir, "log.json"));
+      const resolver = new ConflictResolver(tmpDir, syncLog);
+      const resolved = await resolver.resolveConflict(
         {
           localPath: testFile,
           localMtime: 2000,
@@ -163,13 +165,14 @@ describe("Conflicts", () => {
   });
 
   describe("C5: Conflict appears in sync log", () => {
-    it("creates log entry with type conflict", () => {
+    it("creates log entry with type conflict", async () => {
       const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "conflict-log-test-"));
       const testFile = path.join(tmpDir, "test.md");
       fs.writeFileSync(testFile, "content");
 
-      const resolver = new ConflictResolver(tmpDir, path.join(tmpDir, "log.json"));
-      resolver.resolveConflict(
+      const syncLog = new SyncLog(path.join(tmpDir, "log.json"));
+      const resolver = new ConflictResolver(tmpDir, syncLog);
+      await resolver.resolveConflict(
         {
           localPath: testFile,
           localMtime: 2000,
@@ -181,7 +184,7 @@ describe("Conflicts", () => {
         "remote content"
       );
 
-      const logs = resolver.getLogs();
+      const logs = syncLog.getEntries();
       expect(logs.length).toBeGreaterThan(0);
       const conflictLog = logs.find((l) => l.type === "conflict");
       expect(conflictLog).toBeDefined();
@@ -193,15 +196,16 @@ describe("Conflicts", () => {
   });
 
   describe("C6: Conflict with binary file", () => {
-    it("backs up original binary and writes new content", () => {
+    it("backs up original binary and writes new content", async () => {
       const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "conflict-binary-test-"));
       const testFile = path.join(tmpDir, "image.png");
       const originalBinary = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
       fs.writeFileSync(testFile, originalBinary);
 
-      const resolver = new ConflictResolver(tmpDir, path.join(tmpDir, "log.json"));
+      const syncLog = new SyncLog(path.join(tmpDir, "log.json"));
+      const resolver = new ConflictResolver(tmpDir, syncLog);
       const newContent = "remote binary replacement";
-      const resolved = resolver.resolveConflict(
+      const resolved = await resolver.resolveConflict(
         {
           localPath: testFile,
           localMtime: 2000,

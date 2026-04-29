@@ -9,11 +9,11 @@ interface RsyncOptions {
   sshHost: string;
   remotePath: string;
   relativePath?: string;
-  excludePatterns?: string[];
+  excludePatterns?: readonly string[];
   deleteFlag?: boolean;
 }
 
-function buildExcludeFlags(patterns: string[] = []): string {
+function buildExcludeFlags(patterns: readonly string[] = []): string {
   return patterns.map((p) => `--exclude='${p}'`).join(" ");
 }
 
@@ -104,6 +104,30 @@ export function buildLsCommand(sshHost: string, remotePath: string): string {
 
 export function buildRmCommand(sshHost: string, remotePath: string): string {
   return `ssh "${sshHost}" "rm ${quoteSshPath(remotePath)}"`;
+}
+
+export function buildRmdirCommand(sshHost: string, remotePath: string): string {
+  return `ssh "${sshHost}" "rmdir ${quoteSshPath(remotePath)}"`;
+}
+
+/**
+ * Build an SSH command to stat multiple remote files and return their
+ * modification times as epoch seconds. Uses `stat -c %Y` (GNU/Linux).
+ * For each file, outputs: <epoch_seconds> <relative_path>
+ * Non-existent files produce a stderr line but no stdout line.
+ */
+export function buildStatCommand(sshHost: string, remotePath: string, files: readonly string[]): string {
+  // Build a stat command that outputs "<mtime> <file>" for each file.
+  // Using a for loop to handle files individually so missing files don't
+  // abort the entire command.
+  const statCmds = files
+    .map((f) => {
+      const fullRemote = `${remotePath}/${f}`;
+      // Use stat -c for GNU coreutils; fall back to stat -f for BSD/macOS
+      return `stat -c '%Y ${f}' ${quoteSshPath(fullRemote)} 2>/dev/null || stat -f '%m ${f}' ${quoteSshPath(fullRemote)} 2>/dev/null`;
+    })
+    .join("; ");
+  return `ssh "${sshHost}" "${statCmds}"`;
 }
 
 export async function executeCommand(

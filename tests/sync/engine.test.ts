@@ -12,6 +12,7 @@ vi.mock("../../src/ssh/commands", () => ({
   buildMkdirCommand: vi.fn(() => "mkdir cmd"),
   buildLsCommand: vi.fn(() => "ls cmd"),
   buildRmCommand: vi.fn(() => "rm cmd"),
+  buildRmdirCommand: vi.fn(() => "rmdir cmd"),
   executeCommand: vi.fn(),
   runRsync: vi.fn(),
 }));
@@ -144,7 +145,7 @@ describe("SyncEngine", () => {
     const engine = new SyncEngine(config, tmpDir, manifestPath);
 
     // Seed manifest with an entry
-    engine.getManifest().setEntry("old.md", {
+    engine._manifest.setEntry("old.md", {
       path: "old.md",
       localMtime: 1000,
       remoteMtime: 1000,
@@ -157,7 +158,7 @@ describe("SyncEngine", () => {
 
     expect(result.success).toBe(true);
     expect(commands.executeCommand).toHaveBeenCalledWith("rm cmd", 15000);
-    expect(engine.getManifest().getEntry("old.md")).toBeUndefined();
+    expect(engine._manifest.getEntry("old.md")).toBeUndefined();
   });
 
   it("treats 'No such file' as successful delete", async () => {
@@ -206,14 +207,14 @@ describe("SyncEngine", () => {
     );
   });
 
-  it("deleteLocalFiles removes files and skips pending paths", () => {
+  it("deleteLocalFiles removes files and skips pending paths", async () => {
     const fileToDelete = path.join(tmpDir, "delete-me.md");
     const fileToSkip = path.join(tmpDir, "keep-me.md");
     fs.writeFileSync(fileToDelete, "content");
     fs.writeFileSync(fileToSkip, "content");
 
     const engine = new SyncEngine(config, tmpDir, manifestPath);
-    engine.getManifest().setEntry("delete-me.md", {
+    engine._manifest.setEntry("delete-me.md", {
       path: "delete-me.md",
       localMtime: 1000,
       remoteMtime: 1000,
@@ -223,12 +224,12 @@ describe("SyncEngine", () => {
     });
 
     const skipPaths = new Set(["keep-me.md"]);
-    const deleted = engine.deleteLocalFiles(["delete-me.md", "keep-me.md"], skipPaths);
+    const deleted = await engine.deleteLocalFiles(["delete-me.md", "keep-me.md"], skipPaths);
 
     expect(deleted).toEqual(["delete-me.md"]);
     expect(fs.existsSync(fileToDelete)).toBe(false);
     expect(fs.existsSync(fileToSkip)).toBe(true);
-    expect(engine.getManifest().getEntry("delete-me.md")).toBeUndefined();
+    expect(engine._manifest.getEntry("delete-me.md")).toBeUndefined();
   });
 
   it("pushFile calls mkdir for subdirectory before rsync", async () => {
@@ -340,8 +341,8 @@ describe("SyncEngine", () => {
 
     expect(result.success).toBe(true);
     // Both files should have manifest entries with hashes
-    const entryA = engine.getManifest().getEntry("notes/a.md");
-    const entryB = engine.getManifest().getEntry("notes/b.md");
+    const entryA = engine._manifest.getEntry("notes/a.md");
+    const entryB = engine._manifest.getEntry("notes/b.md");
     expect(entryA).toBeDefined();
     expect(entryA!.hash).toBeTruthy();
     expect(entryA!.size).toBeGreaterThan(0);

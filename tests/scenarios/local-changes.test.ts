@@ -13,6 +13,7 @@ vi.mock("../../src/ssh/commands", () => ({
   buildMkdirCommand: vi.fn(() => "mkdir cmd"),
   buildLsCommand: vi.fn(() => "ls cmd"),
   buildRmCommand: vi.fn(() => "rm cmd"),
+  buildRmdirCommand: vi.fn(() => "rmdir cmd"),
   executeCommand: vi.fn(),
   runRsync: vi.fn(),
 }));
@@ -49,14 +50,14 @@ describe("Local Changes → Remote", () => {
 
     expect(result.success).toBe(true);
     expect(commands.runRsync).toHaveBeenCalled();
-    const entry = env.engine.getManifest().getEntry("notes/new-idea.md");
+    const entry = env.engine._manifest.getEntry("notes/new-idea.md");
     expect(entry).toBeDefined();
     expect(entry!.hash).toBeTruthy();
     expect(entry!.size).toBeGreaterThan(0);
   });
 
   it("L2: edits existing file and pushes update", async () => {
-    createTestFile(env, "notes/existing.md", "original content", true);
+    await createTestFile(env, "notes/existing.md", "original content", true);
     fs.writeFileSync(path.join(env.vaultPath, "notes/existing.md"), "updated content");
     vi.mocked(commands.runRsync).mockResolvedValue({
       changedFiles: ["notes/existing.md"], deletedFiles: [], stdout: "", stderr: "", exitCode: 0,
@@ -65,23 +66,23 @@ describe("Local Changes → Remote", () => {
     const result = await env.engine.pushFile("notes/existing.md");
 
     expect(result.success).toBe(true);
-    const entry = env.engine.getManifest().getEntry("notes/existing.md");
+    const entry = env.engine._manifest.getEntry("notes/existing.md");
     expect(entry).toBeDefined();
   });
 
   it("L3: deletes file from VPS", async () => {
-    createTestFile(env, "notes/old.md", "content", true);
+    await createTestFile(env, "notes/old.md", "content", true);
 
     const result = await env.engine.deleteRemoteFile("notes/old.md");
 
     expect(result.success).toBe(true);
-    expect(env.engine.getManifest().getEntry("notes/old.md")).toBeUndefined();
+    expect(env.engine._manifest.getEntry("notes/old.md")).toBeUndefined();
   });
 
   it("L4: renames file (single) — delete old, push new", async () => {
     createTestFile(env, "notes/new-name.md", "content", false);
     // Seed manifest with old name
-    env.engine.getManifest().setEntry("notes/old-name.md", {
+    env.engine._manifest.setEntry("notes/old-name.md", {
       path: "notes/old-name.md", localMtime: 1000, remoteMtime: 1000,
       lastSyncedMtime: 1000, size: 7, hash: "abc",
     });
@@ -98,8 +99,8 @@ describe("Local Changes → Remote", () => {
     const deleteResult = await env.engine.deleteRemoteFile("notes/old-name.md");
     expect(deleteResult.success).toBe(true);
 
-    expect(env.engine.getManifest().getEntry("notes/old-name.md")).toBeUndefined();
-    expect(env.engine.getManifest().getEntry("notes/new-name.md")).toBeDefined();
+    expect(env.engine._manifest.getEntry("notes/old-name.md")).toBeUndefined();
+    expect(env.engine._manifest.getEntry("notes/new-name.md")).toBeDefined();
   });
 
   it("L5: rename chain collapses to delete origin + push final", async () => {
@@ -152,7 +153,7 @@ describe("Local Changes → Remote", () => {
 
     const result = await env.engine.pushFile("projects/new-project/readme.md");
     expect(result.success).toBe(true);
-    expect(env.engine.getManifest().getEntry("projects/new-project/readme.md")).toBeDefined();
+    expect(env.engine._manifest.getEntry("projects/new-project/readme.md")).toBeDefined();
   });
 
   it("L8: rapid edits to same file produce single flush", async () => {
@@ -240,7 +241,7 @@ describe("Local Changes → Remote", () => {
     const result = await env.engine.pushFile("attachments/image.png");
 
     expect(result.success).toBe(true);
-    const entry = env.engine.getManifest().getEntry("attachments/image.png");
+    const entry = env.engine._manifest.getEntry("attachments/image.png");
     expect(entry).toBeDefined();
     expect(entry!.hash).toBeTruthy();
     expect(entry!.size).toBeGreaterThan(0);
@@ -256,7 +257,7 @@ describe("Local Changes → Remote", () => {
     const result = await env.engine.pushFile("projects/2026/q2/april/notes.md");
 
     expect(result.success).toBe(true);
-    expect(env.engine.getManifest().getEntry("projects/2026/q2/april/notes.md")).toBeDefined();
+    expect(env.engine._manifest.getEntry("projects/2026/q2/april/notes.md")).toBeDefined();
   });
 
   it("L14: delete entire subfolder", async () => {
@@ -884,7 +885,7 @@ describe("Local Changes → Remote", () => {
 
     expect(result.success).toBe(true);
     expect(commands.buildMkdirCommand).toHaveBeenCalled();
-    expect(env.engine.getManifest().getEntry(deepPath)).toBeDefined();
+    expect(env.engine._manifest.getEntry(deepPath)).toBeDefined();
   });
 
   it("L39: rename file within same subfolder (rename without dir change)", async () => {
@@ -963,5 +964,139 @@ describe("Local Changes → Remote", () => {
 
     watcher.dispose();
     vi.useRealTimers();
+  });
+
+  it("L42: delete folder — rm 'Is a directory' retries with rmdir", async () => {
+    // When Obsidian fires a delete event for a folder path, rm fails with
+    // "Is a directory". The engine should retry with rmdir to remove the
+    // empty directory on remote, preventing it from syncing back on pull.
+    const executeResults: Array<{ stdout: string; stderr: string; exitCode: number }> = [];
+
+    vi.mocked(commands.executeCommand).mockImplementation(async (cmd: string) => {
+      if (cmd.includes("rmdir")) {
+        const result = { stdout: "", stderr: "", exitCode: 0 };
+        executeResults.push(result);
+        return result;
+      }
+      // rm fails with "Is a directory"
+      const result = {
+        stdout: "",
+        stderr: "rm: cannot remove '/home/ubuntu/vault/Notes': Is a directory",
+        exitCode: 1,
+      };
+      executeResults.push(result);
+      return result;
+    });
+
+    const result = await env.engine.deleteRemoteFile("Notes");
+    expect(result.success).toBe(true);
+
+    // Verify rmdir was attempted after rm failed
+    expect(commands.executeCommand).toHaveBeenCalledTimes(2);
+    expect(commands.buildRmdirCommand).toHaveBeenCalledWith(
+      env.config.sshHost,
+      `${env.config.remotePath}/Notes`
+    );
+  });
+
+  it("L43: delete folder — rmdir fails on non-empty dir (expected)", async () => {
+    // If the remote directory is NOT empty, rmdir should fail and that's OK.
+    // We return success since the directory has contents we don't want to
+    // force-delete.
+    vi.mocked(commands.executeCommand).mockImplementation(async (cmd: string) => {
+      if (cmd.includes("rmdir")) {
+        return {
+          stdout: "",
+          stderr: "rmdir: failed to remove: Directory not empty",
+          exitCode: 1,
+        };
+      }
+      return {
+        stdout: "",
+        stderr: "rm: cannot remove: Is a directory",
+        exitCode: 1,
+      };
+    });
+
+    const result = await env.engine.deleteRemoteFile("Notes");
+    // Non-empty dir → rmdir fails, but that's fine. The dir has real files.
+    expect(result.success).toBe(true);
+  });
+
+  it("L44: delete file from subfolder — parent dir cleaned up via rmdir", async () => {
+    // After deleting the last file in a remote directory, the engine should
+    // attempt to rmdir the parent directory to prevent empty dirs from
+    // syncing back on pull.
+    vi.mocked(commands.executeCommand).mockImplementation(async (cmd: string) => {
+      if (cmd.includes("rmdir")) {
+        // rmdir succeeds — directory was empty after file delete
+        return { stdout: "", stderr: "", exitCode: 0 };
+      }
+      // rm succeeds for the file
+      return { stdout: "", stderr: "", exitCode: 0 };
+    });
+
+    const result = await env.engine.deleteRemoteFile("Notes/file.md");
+    expect(result.success).toBe(true);
+
+    // Verify rmdir was called for the parent directory
+    expect(commands.buildRmdirCommand).toHaveBeenCalledWith(
+      env.config.sshHost,
+      `${env.config.remotePath}/Notes`
+    );
+  });
+
+  it("L45: delete file from nested subfolder — cleans up ancestor dirs bottom-up", async () => {
+    // After deleting a file from a/b/c/, the engine should try rmdir on
+    // a/b/c, then a/b, then a — stopping at the first non-empty dir.
+    const rmdirCalls: string[] = [];
+
+    vi.mocked(commands.executeCommand).mockImplementation(async (cmd: string) => {
+      // rm succeeds
+      return { stdout: "", stderr: "", exitCode: 0 };
+    });
+    vi.mocked(commands.buildRmdirCommand).mockImplementation((host: string, path: string) => {
+      rmdirCalls.push(path);
+      return "rmdir cmd";
+    });
+
+    const result = await env.engine.deleteRemoteFile("a/b/c/file.md");
+    expect(result.success).toBe(true);
+
+    // Should try rmdir bottom-up: a/b/c, a/b, a
+    expect(rmdirCalls).toEqual([
+      `${env.config.remotePath}/a/b/c`,
+      `${env.config.remotePath}/a/b`,
+      `${env.config.remotePath}/a`,
+    ]);
+  });
+
+  it("L46: delete file from nested dir — stops cleaning at first non-empty ancestor", async () => {
+    const rmdirCalls: string[] = [];
+
+    vi.mocked(commands.executeCommand).mockImplementation(async (cmd: string) => {
+      if (cmd === "rmdir cmd") {
+        // First rmdir (a/b/c) succeeds, second (a/b) fails (not empty)
+        if (rmdirCalls.length <= 1) {
+          return { stdout: "", stderr: "", exitCode: 0 };
+        }
+        return { stdout: "", stderr: "rmdir: not empty", exitCode: 1 };
+      }
+      // rm succeeds
+      return { stdout: "", stderr: "", exitCode: 0 };
+    });
+    vi.mocked(commands.buildRmdirCommand).mockImplementation((host: string, path: string) => {
+      rmdirCalls.push(path);
+      return "rmdir cmd";
+    });
+
+    const result = await env.engine.deleteRemoteFile("a/b/c/file.md");
+    expect(result.success).toBe(true);
+
+    // Should try a/b/c (success), a/b (fail), stop there
+    expect(rmdirCalls).toEqual([
+      `${env.config.remotePath}/a/b/c`,
+      `${env.config.remotePath}/a/b`,
+    ]);
   });
 });

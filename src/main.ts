@@ -1,25 +1,11 @@
-import { Plugin, Notice, TAbstractFile, TFile, TFolder, Menu, setIcon } from "obsidian";
-import { SyncConfig, SyncStatus, DEFAULT_CONFIG, SyncLogEntry, ManifestEntry, MIN_POLL_INTERVAL_SECONDS, SUPPRESS_PRE_OP_MS, SUPPRESS_POST_OP_MS } from "./types";
-import { SyncResult } from "./sync/engine";
+import { Plugin, Notice, TAbstractFile, TFile, Menu, setIcon } from "obsidian";
+import { SyncConfig, SyncStatus, DEFAULT_CONFIG, SyncLogEntry, MIN_POLL_INTERVAL_SECONDS } from "./types";
 import { SSHSyncSettingTab } from "./settings";
 import { SyncEngine } from "./sync/engine";
-import { FileWatcher, WatcherFlush } from "./sync/watcher";
+import { FileWatcher } from "./sync/watcher";
 import { Poller } from "./sync/poller";
-import { SyncLock } from "./utils/sync-lock";
-import {
-  decidePollAction,
-  decidePullAction,
-  decideFlushAction,
-  decideManualSyncAction,
-  decideSyncFileAction,
-  decideToggleAction,
-  resolveConflictWinner,
-  createInitialState,
-  SyncState,
-  SyncEffect,
-} from "./sync/coordinator";
+import { SyncOrchestrator, Platform } from "./sync/orchestrator";
 import * as path from "path";
-import * as fs from "fs";
 
 const STATUS_ICONS: Record<SyncStatus, string> = {
   idle: "cloud",
@@ -30,13 +16,10 @@ const STATUS_ICONS: Record<SyncStatus, string> = {
 
 export default class SSHSyncPlugin extends Plugin {
   settings: SyncConfig = { ...DEFAULT_CONFIG };
+  private orchestrator: SyncOrchestrator | null = null;
   private syncEngine: SyncEngine | null = null;
-  private fileWatcher: FileWatcher | null = null;
-  private poller: Poller | null = null;
   private statusBarEl: HTMLElement | null = null;
   private syncStatus: SyncStatus = "disabled";
-  private syncLock = new SyncLock();
-  private syncState: SyncState = createInitialState(false);
 
   async onload(): Promise<void> {
     await this.loadSettings();
@@ -74,7 +57,7 @@ export default class SSHSyncPlugin extends Plugin {
     this.registerEvent(
       this.app.vault.on("modify", (file: TAbstractFile) => {
         if (file instanceof TFile && file.path && this.settings.syncOnSave && this.settings.enabled) {
-          this.fileWatcher?.onFileChange(file.path);
+          this.watcher?.onFileChange(file.path);
         }
       })
     );
@@ -82,7 +65,7 @@ export default class SSHSyncPlugin extends Plugin {
     this.registerEvent(
       this.app.vault.on("create", (file: TAbstractFile) => {
         if (file instanceof TFile && file.path && this.settings.syncOnSave && this.settings.enabled) {
-          this.fileWatcher?.onFileChange(file.path);
+          this.watcher?.onFileChange(file.path);
         }
       })
     );
@@ -90,7 +73,7 @@ export default class SSHSyncPlugin extends Plugin {
     this.registerEvent(
       this.app.vault.on("delete", (file: TAbstractFile) => {
         if (file instanceof TFile && file.path && this.settings.syncOnSave && this.settings.enabled) {
-          this.fileWatcher?.onFileDeleted(file.path);
+          this.watcher?.onFileDeleted(file.path);
         }
       })
     );
@@ -99,7 +82,7 @@ export default class SSHSyncPlugin extends Plugin {
       this.app.vault.on("rename", (file: TAbstractFile, oldPath: string) => {
         if (this.settings.syncOnSave && this.settings.enabled) {
           if (file instanceof TFile && oldPath && file.path) {
-            this.fileWatcher?.onFileRenamed(file.path, oldPath);
+            this.watcher?.onFileRenamed(file.path, oldPath);
           }
         }
       })
@@ -112,6 +95,8 @@ export default class SSHSyncPlugin extends Plugin {
     }
   }
 
+  private watcher: FileWatcher | null = null;
+
   private initSync(): void {
     const vaultPath = (this.app.vault.adapter as any).basePath;
     const manifestPath = path.join(
@@ -122,263 +107,47 @@ export default class SSHSyncPlugin extends Plugin {
       "sync-manifest.json"
     );
 
-    this.syncEngine = new SyncEngine(this.settings, vaultPath, manifestPath);
+    const engine = new SyncEngine(this.settings, vaultPath, manifestPath);
+    this.syncEngine = engine;
 
-    this.fileWatcher = new FileWatcher(500, async (flush: WatcherFlush) => {
-      if (!this.settings.enabled || !this.syncEngine) return;
-      await this.syncLock.run(async () => {
-        this.updateStatusBar("syncing");
-        let hasError = false;
-
-        // Push changed files
-        for (const file of flush.changedFiles) {
-          const result = await this.syncEngine!.pushFile(file);
-          if (!result.success) {
-            hasError = true;
-            new Notice(`Sync failed for ${file}: ${result.error}`);
-          }
-        }
-
-        // Delete remote files that were deleted locally
-        for (const file of flush.deletedFiles) {
-          const result = await this.syncEngine!.deleteRemoteFile(file);
-          if (!result.success) {
-            hasError = true;
-            new Notice(`Remote delete failed for ${file}: ${result.error}`);
-          }
-        }
-
-        this.updateStatusBar(hasError ? "error" : "idle");
-      });
+    this.watcher = new FileWatcher(500, async (flush) => {
+      await this.orchestrator?.handleFlush(flush);
     });
 
-    this.poller = new Poller(async () => {
-      if (!this.settings.enabled || !this.syncEngine) return;
-      await this.pollRemoteChanges();
+    const poller = new Poller(async () => {
+      if (!this.settings.enabled) return;
+      await this.orchestrator?.pollRemoteChanges();
     }, Math.max(this.settings.pollIntervalSeconds, MIN_POLL_INTERVAL_SECONDS) * 1000);
 
+    const platform: Platform = {
+      notify: (message: string) => new Notice(message),
+      updateStatus: (status: SyncStatus) => this.updateStatusBar(status),
+      getVaultPath: () => (this.app.vault.adapter as any).basePath,
+    };
+
+    this.orchestrator = new SyncOrchestrator(
+      engine,
+      this.watcher,
+      poller,
+      platform,
+      () => this.settings
+    );
+
     if (this.settings.enabled) {
-      this.poller.start();
+      poller.start();
     }
   }
 
-  private async pollRemoteChanges(): Promise<void> {
-    if (!this.syncEngine) return;
-
-    const hasPending = this.fileWatcher?.hasPending() ?? false;
-    const pollDecision = decidePollAction(this.syncState, hasPending);
-    this.syncState = pollDecision.state;
-
-    if (pollDecision.effects.length === 0) return;
-
-    await this.syncLock.run(async () => {
-      // Re-check after acquiring lock
-      if (this.fileWatcher?.hasPending()) return;
-
-      this.updateStatusBar("syncing");
-      const changes = await this.syncEngine!.detectRemoteChanges();
-
-      // Gather local file mtimes for conflict detection
-      const localMtimes = new Map<string, number>();
-      const vaultPath = (this.app.vault.adapter as any).basePath;
-      for (const file of [...changes.changedFiles, ...changes.deletedFiles]) {
-        const fullPath = path.join(vaultPath, file);
-        if (fs.existsSync(fullPath)) {
-          localMtimes.set(file, fs.statSync(fullPath).mtimeMs);
-        }
-      }
-
-      const manifest = this.syncEngine!.getManifest().getEntries();
-      const pendingPaths = this.fileWatcher?.getPendingPaths() ?? new Set<string>();
-
-      const pullDecision = decidePullAction(
-        this.syncState,
-        changes,
-        manifest,
-        this.settings,
-        pendingPaths,
-        localMtimes
-      );
-      this.syncState = pullDecision.state;
-
-      await this.executeEffects(pullDecision.effects);
-    });
-  }
-
-  private async executeEffects(effects: readonly SyncEffect[]): Promise<void> {
-    for (const effect of effects) {
-      switch (effect.type) {
-        case "pushFiles":
-          for (const file of effect.files) {
-            const result = await this.syncEngine!.pushFile(file);
-            if (!result.success) {
-              new Notice(`Sync failed for ${file}: ${result.error}`);
-            }
-          }
-          break;
-        case "pushFile":
-          if (this.syncEngine) {
-            const result = await this.syncEngine.pushFile(effect.file);
-            if (result.success) {
-              this.updateStatusBar("idle");
-              new Notice(`SSH Sync: Pushed ${effect.file}`);
-            } else {
-              this.updateStatusBar("error");
-              new Notice(`SSH Sync: Failed to push ${effect.file} — ${result.error}`);
-            }
-          }
-          break;
-        case "pushAll":
-          await this.syncEngine?.pushAll();
-          break;
-        case "pullWithoutDelete":
-          if (this.syncEngine) {
-            this.fileWatcher?.suppress(SUPPRESS_PRE_OP_MS);
-            const result = await this.syncEngine.pullWithoutDelete();
-            this.fileWatcher?.suppress(SUPPRESS_POST_OP_MS);
-            if (!result.success) {
-              this.updateStatusBar("error");
-              new Notice(`SSH Sync pull failed: ${result.error}`);
-            }
-          }
-          break;
-        case "pullWithDelete":
-          this.fileWatcher?.suppress(SUPPRESS_PRE_OP_MS);
-          await this.syncEngine?.pull();
-          this.fileWatcher?.suppress(SUPPRESS_POST_OP_MS);
-          break;
-        case "deleteRemoteFiles":
-          if (this.syncEngine) {
-            for (const file of effect.files) {
-              const result = await this.syncEngine.deleteRemoteFile(file);
-              if (!result.success) {
-                new Notice(`Remote delete failed for ${file}: ${result.error}`);
-              }
-            }
-          }
-          break;
-        case "deleteLocalFiles":
-          if (this.syncEngine) {
-            this.fileWatcher?.suppress(SUPPRESS_PRE_OP_MS);
-            const deleted = this.syncEngine.deleteLocalFiles(effect.files, new Set(effect.skipPaths));
-            this.fileWatcher?.suppress(SUPPRESS_POST_OP_MS);
-            // Notification handled by the notify effect that follows
-          }
-          break;
-        case "resolveConflict": {
-          if (this.syncEngine) {
-            const vaultPath = (this.app.vault.adapter as any).basePath;
-            const fullPath = path.join(vaultPath, effect.file);
-            const winner = resolveConflictWinner(effect.policy, effect.localMtime, effect.remoteMtime);
-            if (winner === "remote") {
-              // Pull will overwrite — backup local version first
-              const localContent = fs.existsSync(fullPath) ? fs.readFileSync(fullPath, "utf-8") : "";
-              // After pull, the conflict resolver will handle backup
-              this.syncEngine.getConflictResolver().resolveConflict(
-                {
-                  localPath: fullPath,
-                  localMtime: effect.localMtime,
-                  remoteMtime: effect.remoteMtime,
-                  winner: "remote",
-                  backupPath: "",
-                  timestamp: Date.now(),
-                },
-                localContent // backup local, pull will overwrite
-              );
-            } else {
-              // Local wins — log it but don't pull this file
-              this.syncEngine.getConflictResolver().addLog({
-                type: "conflict",
-                path: effect.file,
-                message: `Conflict resolved: local wins. Remote version discarded.`,
-              });
-            }
-          }
-          break;
-        }
-        case "preserveLocalFile":
-          // No-op: the file is kept as-is. The pushFile effect that follows will push it back.
-          break;
-        case "fullSync":
-          if (this.syncEngine) {
-            this.fileWatcher?.suppress(SUPPRESS_PRE_OP_MS);
-            const result = await this.syncEngine.fullSync();
-            this.fileWatcher?.suppress(SUPPRESS_POST_OP_MS);
-            if (result.success) {
-              this.updateStatusBar("idle");
-              new Notice(`SSH Sync: Complete — ${result.changedFiles.length} file(s) synced`);
-            } else {
-              this.updateStatusBar("error");
-              new Notice(`SSH Sync: Failed — ${result.error}`);
-            }
-          }
-          break;
-        case "notify":
-          new Notice(effect.message);
-          break;
-        case "notifyError":
-          new Notice(effect.message);
-          break;
-        case "updateStatus":
-          this.updateStatusBar(effect.status);
-          break;
-        case "startPoller":
-          this.poller?.updateInterval(effect.intervalMs);
-          this.poller?.start();
-          break;
-        case "stopPoller":
-          this.poller?.stop();
-          break;
-        case "detectRemoteChanges":
-          // Handled inline in pollRemoteChanges
-          break;
-        case "log":
-          this.syncEngine?.getConflictResolver().addLog(effect.entry);
-          break;
-      }
+  async manualSync(): Promise<void> {
+    if (!this.orchestrator) {
+      return;
     }
-  }
-
-  async manualSync(): Promise<SyncResult> {
-    if (!this.syncEngine) {
-      return { success: false, changedFiles: [], conflicts: 0, error: "Sync engine not initialized" };
-    }
-    return this.syncLock.run(async () => {
-      this.updateStatusBar("syncing");
-      new Notice("SSH Sync: Starting full sync...");
-      // Suppress watcher events during sync to prevent feedback loops.
-      // Pull writes files to vault → Obsidian fires events → watcher would
-      // push them right back. We suppress during the operation and for a
-      // short grace period afterward (just enough for Obsidian's filesystem
-      // watcher to deliver its events — typically < 500ms).
-      this.fileWatcher?.suppress(SUPPRESS_PRE_OP_MS);
-      try {
-        const result = await this.syncEngine!.fullSync();
-        if (result.success) {
-          this.updateStatusBar("idle");
-          new Notice(`SSH Sync: Complete — ${result.changedFiles.length} file(s) synced`);
-        } else {
-          this.updateStatusBar("error");
-          new Notice(`SSH Sync: Failed — ${result.error}`);
-        }
-        // Grace period: Obsidian events from the pull may still be in flight.
-        // 1s is enough for filesystem events to settle without blocking
-        // subsequent user edits for too long.
-        this.fileWatcher?.suppress(SUPPRESS_POST_OP_MS);
-        return result;
-      } catch (err) {
-        this.fileWatcher?.suppress(SUPPRESS_POST_OP_MS);
-        this.updateStatusBar("error");
-        const message = (err as Error).message || "Unknown error";
-        new Notice(`SSH Sync: Error — ${message}`);
-        return { success: false, changedFiles: [], conflicts: 0, error: message };
-      }
-    });
+    await this.orchestrator.manualSync();
   }
 
   async testConnection(): Promise<{ success: boolean; error?: string }> {
     if (!this.syncEngine) {
-      return { success: false, error: "Sync engine not initialized" };
+      return { success: false, error: "Sync not initialized" };
     }
     return this.syncEngine.testConnection();
   }
@@ -386,29 +155,19 @@ export default class SSHSyncPlugin extends Plugin {
   async toggleSync(): Promise<void> {
     this.settings.enabled = !this.settings.enabled;
     await this.saveSettings();
-    this.onSettingsChanged();
-    this.updateStatusBar(this.settings.enabled ? "idle" : "disabled");
-    new Notice(`SSH Sync ${this.settings.enabled ? "enabled" : "disabled"}`);
+    await this.orchestrator?.toggle();
   }
 
   onSettingsChanged(): void {
-    if (this.poller) {
-      if (this.settings.enabled) {
-        this.poller.updateInterval(Math.max(this.settings.pollIntervalSeconds, MIN_POLL_INTERVAL_SECONDS) * 1000);
-        this.poller.start();
-      } else {
-        this.poller.stop();
-      }
-    }
+    this.orchestrator?.onSettingsChanged();
   }
 
   getSyncLogs(): SyncLogEntry[] {
-    return this.syncEngine?.getConflictResolver().getLogs() || [];
+    return this.orchestrator?.getSyncLogs() || [];
   }
 
   async onunload(): Promise<void> {
-    this.fileWatcher?.dispose();
-    this.poller?.stop();
+    this.orchestrator?.dispose();
   }
 
   async loadSettings(): Promise<void> {
@@ -463,25 +222,10 @@ export default class SSHSyncPlugin extends Plugin {
       new Notice("SSH Sync: No active file");
       return;
     }
-    if (!this.syncEngine) {
-      new Notice("SSH Sync: Sync engine not initialized");
+    if (!this.orchestrator) {
+      new Notice("SSH Sync: Sync not initialized");
       return;
     }
-    await this.syncLock.run(async () => {
-      this.updateStatusBar("syncing");
-      try {
-        const result = await this.syncEngine!.pushFile(file.path);
-        if (result.success) {
-          this.updateStatusBar("idle");
-          new Notice(`SSH Sync: Pushed ${file.name}`);
-        } else {
-          this.updateStatusBar("error");
-          new Notice(`SSH Sync: Failed to push ${file.name} — ${result.error}`);
-        }
-      } catch (err) {
-        this.updateStatusBar("error");
-        new Notice(`SSH Sync: Error — ${(err as Error).message}`);
-      }
-    });
+    await this.orchestrator.syncFile(file.path);
   }
 }

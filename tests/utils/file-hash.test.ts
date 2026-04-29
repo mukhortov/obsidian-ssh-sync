@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { hashFile, hashFileSync } from "../../src/utils/file-hash";
+import { hashFile } from "../../src/utils/file-hash";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
@@ -35,25 +35,5 @@ describe("hashFile", () => {
   it("returns empty string for nonexistent file", async () => {
     const hash = await hashFile("/nonexistent/path/file.md");
     expect(hash).toBe("");
-  });
-});
-
-describe("hashFileSync", () => {
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "hash-sync-test-"));
-  const testFile = path.join(tmpDir, "test.md");
-
-  beforeAll(() => {
-    fs.writeFileSync(testFile, "hello world");
-  });
-
-  afterAll(() => {
-    fs.rmSync(tmpDir, { recursive: true });
-  });
-
-  it("returns SHA-256 hash synchronously", () => {
-    const hash = hashFileSync(testFile);
-    expect(hash).toBe(
-      "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9"
-    );
   });
 });

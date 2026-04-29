@@ -1,15 +1,17 @@
-import * as fs from "fs";
+import * as fsp from "fs/promises";
 import * as crypto from "crypto";
+import { createReadStream } from "fs";
 
 export async function hashFile(filePath: string): Promise<string> {
+  try {
+    await fsp.access(filePath);
+  } catch {
+    return "";
+  }
   return new Promise((resolve) => {
     try {
-      if (!fs.existsSync(filePath)) {
-        resolve("");
-        return;
-      }
       const hash = crypto.createHash("sha256");
-      const stream = fs.createReadStream(filePath);
+      const stream = createReadStream(filePath);
       stream.on("data", (chunk) => hash.update(chunk));
       stream.on("end", () => resolve(hash.digest("hex")));
       stream.on("error", () => resolve(""));
@@ -17,16 +19,4 @@ export async function hashFile(filePath: string): Promise<string> {
       resolve("");
     }
   });
-}
-
-export function hashFileSync(filePath: string): string {
-  try {
-    if (!fs.existsSync(filePath)) {
-      return "";
-    }
-    const content = fs.readFileSync(filePath);
-    return crypto.createHash("sha256").update(content).digest("hex");
-  } catch {
-    return "";
-  }
 }

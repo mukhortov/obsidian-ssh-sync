@@ -88,10 +88,10 @@ describe.skipIf(skipE2E)("E2E: Real SSH sync", () => {
     expect(remoteFileExists(env, "my notes/hello world.md")).toBe(true);
   });
 
-  it("deleteLocalFiles removes file from vault", () => {
+  it("deleteLocalFiles removes file from vault", async () => {
     createLocalFile(env, "to-delete.md", "content");
 
-    const deleted = env.engine.deleteLocalFiles(["to-delete.md"], new Set());
+    const deleted = await env.engine.deleteLocalFiles(["to-delete.md"], new Set());
 
     expect(deleted).toEqual(["to-delete.md"]);
     expect(fs.existsSync(path.join(env.localVaultPath, "to-delete.md"))).toBe(false);

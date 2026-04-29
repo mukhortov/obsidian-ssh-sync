@@ -1,14 +1,16 @@
 import * as fs from "fs";
+import * as fsp from "fs/promises";
 import * as path from "path";
 import { ManifestData, ManifestEntry } from "../types";
 
-export interface RenameInfo {
-  oldPath: string;
-  newPath: string;
+/** Mutable internal representation — ManifestStore is the sole owner. */
+interface MutableManifestData {
+  files: Record<string, ManifestEntry>;
+  lastSyncTime: number;
 }
 
 export class ManifestStore {
-  private data: ManifestData;
+  private data: MutableManifestData;
 
   constructor(private filePath: string) {
     this.data = this.load();
@@ -54,31 +56,8 @@ export class ManifestStore {
     this.data.lastSyncTime = time;
   }
 
-  detectRenames(currentFiles: Map<string, { hash: string; mtime: number }>): RenameInfo[] {
-    const renames: RenameInfo[] = [];
-    const knownPaths = new Set(Object.keys(this.data.files));
-    const currentPaths = new Set(currentFiles.keys());
-
-    const deletedPaths = [...knownPaths].filter((p) => !currentPaths.has(p));
-    const newPaths = new Set([...currentPaths].filter((p) => !knownPaths.has(p)));
-
-    for (const oldPath of deletedPaths) {
-      const oldEntry = this.data.files[oldPath];
-      for (const newPath of newPaths) {
-        const current = currentFiles.get(newPath)!;
-        if (current.hash === oldEntry.hash) {
-          renames.push({ oldPath, newPath });
-          newPaths.delete(newPath);
-          break;
-        }
-      }
-    }
-
-    return renames;
-  }
-
-  save(): void {
-    fs.mkdirSync(path.dirname(this.filePath), { recursive: true });
-    fs.writeFileSync(this.filePath, JSON.stringify(this.data, null, 2));
+  async save(): Promise<void> {
+    await fsp.mkdir(path.dirname(this.filePath), { recursive: true });
+    await fsp.writeFile(this.filePath, JSON.stringify(this.data, null, 2));
   }
 }

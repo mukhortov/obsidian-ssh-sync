@@ -13,44 +13,56 @@ export interface SyncConfig {
 }
 
 export interface ManifestEntry {
-  path: string;
-  localMtime: number;
-  remoteMtime: number;
-  lastSyncedMtime: number;
-  size: number;
-  hash: string;
+  readonly path: string;
+  readonly localMtime: number;
+  readonly remoteMtime: number;
+  readonly lastSyncedMtime: number;
+  readonly size: number;
+  readonly hash: string;
 }
 
 export interface ManifestData {
-  files: Record<string, ManifestEntry>;
-  lastSyncTime: number;
+  readonly files: Record<string, ManifestEntry>;
+  readonly lastSyncTime: number;
 }
 
 export interface ConflictInfo {
-  localPath: string;
-  localMtime: number;
-  remoteMtime: number;
-  winner: "local" | "remote";
-  backupPath: string;
-  timestamp: number;
+  readonly localPath: string;
+  readonly localMtime: number;
+  readonly remoteMtime: number;
+  readonly winner: "local" | "remote";
+  readonly backupPath: string;
+  readonly timestamp: number;
 }
 
 export interface SyncLogEntry {
-  timestamp: number;
-  type: "push" | "pull" | "conflict" | "error" | "rename" | "delete";
-  path: string;
-  message: string;
+  readonly timestamp: number;
+  readonly type: "push" | "pull" | "conflict" | "error" | "rename" | "delete";
+  readonly path: string;
+  readonly message: string;
 }
 
 export interface RsyncResult {
-  changedFiles: string[];
-  deletedFiles: string[];
-  stdout: string;
-  stderr: string;
-  exitCode: number;
+  readonly changedFiles: readonly string[];
+  readonly deletedFiles: readonly string[];
+  readonly stdout: string;
+  readonly stderr: string;
+  readonly exitCode: number;
 }
 
 export const MIN_POLL_INTERVAL_SECONDS = 5;
+
+/**
+ * Parse and clamp a poll interval string to at least MIN_POLL_INTERVAL_SECONDS.
+ * Returns MIN_POLL_INTERVAL_SECONDS for invalid or below-minimum input.
+ */
+export function clampPollInterval(input: string): number {
+  const num = parseInt(input, 10);
+  if (isNaN(num) || num < MIN_POLL_INTERVAL_SECONDS) {
+    return MIN_POLL_INTERVAL_SECONDS;
+  }
+  return num;
+}
 
 /**
  * Pre-operation suppress: blocks watcher events while a sync operation

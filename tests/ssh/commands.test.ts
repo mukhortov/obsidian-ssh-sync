@@ -6,6 +6,7 @@ import {
   buildMkdirCommand,
   buildLsCommand,
   buildRmCommand,
+  buildStatCommand,
   parseRsyncOutput,
   escapeRemotePath,
 } from "../../src/ssh/commands";
@@ -313,5 +314,27 @@ describe("SSH commands with special characters", () => {
   it("buildRmCommand expands tilde in ~/path", () => {
     const cmd = buildRmCommand("user@host", "~/obsidian-vault/old.md");
     expect(cmd).toBe(`ssh "user@host" "rm ~/'obsidian-vault/old.md'"`);
+  });
+});
+
+describe("buildStatCommand", () => {
+  it("builds stat command for multiple files", () => {
+    const cmd = buildStatCommand("user@host", "/remote/vault", ["a.md", "b.md"]);
+    expect(cmd).toContain("ssh");
+    expect(cmd).toContain("user@host");
+    expect(cmd).toContain("stat");
+    expect(cmd).toContain("a.md");
+    expect(cmd).toContain("b.md");
+  });
+
+  it("handles files with spaces", () => {
+    const cmd = buildStatCommand("user@host", "/remote/vault", ["my file.md"]);
+    expect(cmd).toContain("my file.md");
+  });
+
+  it("handles tilde paths", () => {
+    const cmd = buildStatCommand("user@host", "~/vault", ["test.md"]);
+    expect(cmd).toContain("~/");
+    expect(cmd).toContain("test.md");
   });
 });

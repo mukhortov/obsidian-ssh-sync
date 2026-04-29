@@ -1,6 +1,6 @@
 import { App, Notice, PluginSettingTab, Setting, Modal } from "obsidian";
 import type SSHSyncPlugin from "./main";
-import { SyncLogEntry, MIN_POLL_INTERVAL_SECONDS } from "./types";
+import { SyncLogEntry, MIN_POLL_INTERVAL_SECONDS, clampPollInterval } from "./types";
 
 export class SSHSyncSettingTab extends PluginSettingTab {
   plugin: SSHSyncPlugin;
@@ -66,15 +66,11 @@ export class SSHSyncSettingTab extends PluginSettingTab {
         // Validate on blur instead of every keystroke so the user can
         // freely clear and retype values without the field resetting.
         text.inputEl.addEventListener("blur", async () => {
-          const num = parseInt(text.inputEl.value, 10);
-          if (isNaN(num) || num < MIN_POLL_INTERVAL_SECONDS) {
-            this.plugin.settings.pollIntervalSeconds = MIN_POLL_INTERVAL_SECONDS;
-            text.setValue(String(MIN_POLL_INTERVAL_SECONDS));
-            await this.plugin.saveSettings();
-            this.plugin.onSettingsChanged();
-            return;
+          const clamped = clampPollInterval(text.inputEl.value);
+          if (clamped !== parseInt(text.inputEl.value, 10)) {
+            text.setValue(String(clamped));
           }
-          this.plugin.settings.pollIntervalSeconds = num;
+          this.plugin.settings.pollIntervalSeconds = clamped;
           await this.plugin.saveSettings();
           this.plugin.onSettingsChanged();
         });
@@ -152,12 +148,7 @@ export class SSHSyncSettingTab extends PluginSettingTab {
           btn.setButtonText("Syncing...");
           btn.setDisabled(true);
           try {
-            const result = await this.plugin.manualSync();
-            if (result.success) {
-              new Notice(`Sync complete: ${result.changedFiles.length} files changed`);
-            } else {
-              new Notice(`Sync failed: ${result.error}`);
-            }
+            await this.plugin.manualSync();
           } catch (err) {
             new Notice(`Sync error: ${(err as Error).message}`);
           } finally {

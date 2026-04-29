@@ -14,6 +14,7 @@ vi.mock("../../src/ssh/commands", () => ({
   buildMkdirCommand: vi.fn(() => "mkdir cmd"),
   buildLsCommand: vi.fn(() => "ls cmd"),
   buildRmCommand: vi.fn(() => "rm cmd"),
+  buildRmdirCommand: vi.fn(() => "rmdir cmd"),
   executeCommand: vi.fn(),
   runRsync: vi.fn(),
 }));
@@ -55,18 +56,18 @@ describe("Multi-Device", () => {
     expect(push2.success).toBe(true);
 
     // Env1 has file-a.md but NOT file-b.md (independent manifests)
-    expect(env1.engine.getManifest().getEntry("file-a.md")).toBeDefined();
-    expect(env1.engine.getManifest().getEntry("file-b.md")).toBeUndefined();
+    expect(env1.engine._manifest.getEntry("file-a.md")).toBeDefined();
+    expect(env1.engine._manifest.getEntry("file-b.md")).toBeUndefined();
 
     // Env2 has file-b.md but NOT file-a.md
-    expect(env2.engine.getManifest().getEntry("file-b.md")).toBeDefined();
-    expect(env2.engine.getManifest().getEntry("file-a.md")).toBeUndefined();
+    expect(env2.engine._manifest.getEntry("file-b.md")).toBeDefined();
+    expect(env2.engine._manifest.getEntry("file-a.md")).toBeUndefined();
 
     // Env1 polls and detects file-b.md on remote — clean pull (no manifest entry)
     const decision = decidePullAction(
       createInitialState(true),
       { changedFiles: ["file-b.md"], deletedFiles: [] },
-      env1.engine.getManifest().getEntries(),
+      env1.engine.getManifestEntries(),
       env1.config,
       new Set(),
       new Map() // file-b.md doesn't exist locally on env1
@@ -84,8 +85,8 @@ describe("Multi-Device", () => {
 
     // Both have manifest entry for shared.md with lastSyncedMtime: 1000
     const sharedEntry = makeManifestEntry("shared.md", { lastSyncedMtime: 1000 });
-    env1.engine.getManifest().setEntry("shared.md", sharedEntry);
-    env2.engine.getManifest().setEntry("shared.md", sharedEntry);
+    env1.engine._manifest.setEntry("shared.md", sharedEntry);
+    env2.engine._manifest.setEntry("shared.md", sharedEntry);
 
     // Env1 edited shared.md (localMtime: 2000) — assume push succeeded already
     // Env2 also edited shared.md (localMtime: 3000)
@@ -93,7 +94,7 @@ describe("Multi-Device", () => {
     const decision = decidePullAction(
       createInitialState(true),
       { changedFiles: ["shared.md"], deletedFiles: [] },
-      env2.engine.getManifest().getEntries(), // lastSyncedMtime: 1000
+      env2.engine.getManifestEntries(), // lastSyncedMtime: 1000
       env2.config,
       new Set(),
       new Map([["shared.md", 3000]]) // Env2's local edit

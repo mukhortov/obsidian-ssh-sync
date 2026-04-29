@@ -83,7 +83,8 @@ export function decidePullAction(
   manifestFiles: Readonly<Record<string, ManifestEntry>>,
   config: SyncConfig,
   pendingPaths: ReadonlySet<string>,
-  localFileMtimes: ReadonlyMap<string, number>
+  localFileMtimes: ReadonlyMap<string, number>,
+  remoteFileMtimes?: ReadonlyMap<string, number>
 ): SyncDecision {
   const effects: SyncEffect[] = [];
 
@@ -131,13 +132,15 @@ export function decidePullAction(
       const localChanged = localMtime > entry.lastSyncedMtime;
       if (localChanged) {
         // Both sides changed — conflict (C1)
+        // Use real remote mtime if available, otherwise fall back to manifest
+        const remoteMtime = remoteFileMtimes?.get(file) ?? entry.remoteMtime;
         conflictFiles.push(file);
         effects.push({
           type: "resolveConflict",
           file,
           policy: config.conflictPolicy,
           localMtime,
-          remoteMtime: entry.remoteMtime,
+          remoteMtime,
         });
       } else {
         // Only remote changed — safe to pull
@@ -341,6 +344,28 @@ export function decideToggleAction(
       status: nowEnabled ? "idle" : "disabled",
     },
     effects,
+  };
+}
+
+/**
+ * Decide what to do when settings change (e.g. poll interval updated).
+ */
+export function decideSettingsChangedAction(
+  state: SyncState,
+  enabled: boolean,
+  pollIntervalMs: number
+): SyncDecision {
+  if (enabled) {
+    return {
+      state: { ...state, status: state.status === "disabled" ? "idle" : state.status },
+      effects: [
+        { type: "startPoller", intervalMs: pollIntervalMs },
+      ],
+    };
+  }
+  return {
+    state: { ...state, status: "disabled" },
+    effects: [{ type: "stopPoller" }],
   };
 }
 

@@ -17,6 +17,7 @@ vi.mock("../../src/ssh/commands", () => ({
   buildMkdirCommand: vi.fn(() => "mkdir cmd"),
   buildLsCommand: vi.fn(() => "ls cmd"),
   buildRmCommand: vi.fn(() => "rm cmd"),
+  buildRmdirCommand: vi.fn(() => "rmdir cmd"),
   executeCommand: vi.fn(),
   runRsync: vi.fn(),
 }));
@@ -131,20 +132,19 @@ describe("Lifecycle", () => {
     env.cleanup();
   });
 
-  it("F7: change SSH host while sync enabled", () => {
-    const env1 = createTestEnv({ sshHost: "user@host-a" });
+  it("F7: change SSH host while sync enabled", async () => {
+    // Create engine with host-b and verify commands use the new host
     const env2 = createTestEnv({ sshHost: "user@host-b" });
 
-    // Both engines can be created with different hosts
-    expect(env1.config.sshHost).toBe("user@host-a");
-    expect(env2.config.sshHost).toBe("user@host-b");
+    vi.mocked(commands.executeCommand).mockResolvedValue({ stdout: "", stderr: "", exitCode: 0 });
 
-    // Engine is recreated with new host (env2 represents the post-change engine)
-    expect(env1.engine).toBeDefined();
-    expect(env2.engine).toBeDefined();
-    expect(env1.config.sshHost).not.toBe(env2.config.sshHost);
+    await env2.engine.ensureRemoteDir();
 
-    env1.cleanup();
+    expect(commands.buildMkdirCommand).toHaveBeenCalledWith(
+      "user@host-b",
+      env2.config.remotePath
+    );
+
     env2.cleanup();
   });
 
@@ -217,7 +217,7 @@ describe("Lifecycle", () => {
     expect(result.success).toBe(true);
 
     // Verify manifest has the entry
-    const entry = env.engine.getManifest().getEntry("crash-test.md");
+    const entry = env.engine._manifest.getEntry("crash-test.md");
     expect(entry).toBeDefined();
     expect(entry!.path).toBe("crash-test.md");
 

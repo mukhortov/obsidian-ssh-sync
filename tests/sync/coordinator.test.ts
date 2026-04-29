@@ -201,6 +201,54 @@ describe("decidePullAction", () => {
     expect(logEffect).toBeDefined();
     expect(logEffect!.entry.message).toContain("restored");
   });
+
+  it("uses real remote mtime for conflict resolution when remoteFileMtimes provided", () => {
+    const manifest: Record<string, ManifestEntry> = {
+      "notes/shared.md": makeManifestEntry("notes/shared.md", {
+        lastSyncedMtime: 1000,
+        remoteMtime: 1000, // stale manifest value
+      }),
+    };
+    const localMtimes = new Map([["notes/shared.md", 2000]]);
+    const remoteFileMtimes = new Map([["notes/shared.md", 3000]]);
+
+    const newestConfig = { ...config, conflictPolicy: "newest-wins" as const };
+    const decision = decidePullAction(
+      idleState(),
+      { changedFiles: ["notes/shared.md"], deletedFiles: [] },
+      manifest,
+      newestConfig,
+      new Set(),
+      localMtimes,
+      remoteFileMtimes
+    );
+    const conflictEffect = findEffect(decision.effects, "resolveConflict");
+    expect(conflictEffect).toBeDefined();
+    // Should use real remote mtime (3000), not manifest value (1000)
+    expect(conflictEffect!.remoteMtime).toBe(3000);
+  });
+
+  it("falls back to manifest remoteMtime when remoteFileMtimes not provided", () => {
+    const manifest: Record<string, ManifestEntry> = {
+      "notes/shared.md": makeManifestEntry("notes/shared.md", {
+        lastSyncedMtime: 1000,
+        remoteMtime: 1500,
+      }),
+    };
+    const localMtimes = new Map([["notes/shared.md", 2000]]);
+
+    const decision = decidePullAction(
+      idleState(),
+      { changedFiles: ["notes/shared.md"], deletedFiles: [] },
+      manifest,
+      config,
+      new Set(),
+      localMtimes
+    );
+    const conflictEffect = findEffect(decision.effects, "resolveConflict");
+    expect(conflictEffect).toBeDefined();
+    expect(conflictEffect!.remoteMtime).toBe(1500);
+  });
 });
 
 describe("decideFlushAction", () => {

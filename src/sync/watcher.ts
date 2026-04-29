@@ -1,6 +1,6 @@
 export interface WatcherFlush {
-  changedFiles: Set<string>;
-  deletedFiles: Set<string>;
+  readonly changedFiles: ReadonlySet<string>;
+  readonly deletedFiles: ReadonlySet<string>;
 }
 
 /**
@@ -138,10 +138,43 @@ export class FileWatcher {
   }
 
   /**
+   * Immediately flush any pending changes, canceling the debounce timer.
+   * Used by manualSync to ensure local deletions propagate to remote
+   * before fullSync pulls remote state back to local.
+   * Returns the flush result, or null if nothing was pending.
+   */
+  async flushNow(): Promise<WatcherFlush | null> {
+    if (this.pendingChanges.size === 0 && this.pendingDeletes.size === 0) {
+      return null;
+    }
+    // Cancel the debounce timer
+    if (this.timer) {
+      clearTimeout(this.timer);
+      this.timer = null;
+    }
+    const flush: WatcherFlush = {
+      changedFiles: new Set(this.pendingChanges),
+      deletedFiles: new Set(this.pendingDeletes),
+    };
+    for (const f of flush.changedFiles) this.activeFlush.add(f);
+    for (const f of flush.deletedFiles) this.activeFlush.add(f);
+    this.pendingChanges.clear();
+    this.pendingDeletes.clear();
+    this.renameOrigins.clear();
+    try {
+      await this.onSync(flush);
+    } finally {
+      for (const f of flush.changedFiles) this.activeFlush.delete(f);
+      for (const f of flush.deletedFiles) this.activeFlush.delete(f);
+    }
+    return flush;
+  }
+
+  /**
    * Returns a snapshot of all paths currently pending (queued, debouncing,
    * or in an active flush that hasn't completed yet).
    */
-  getPendingPaths(): Set<string> {
+  getPendingPaths(): ReadonlySet<string> {
     return new Set([...this.pendingChanges, ...this.pendingDeletes, ...this.activeFlush]);
   }
 

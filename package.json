@@ -1,6 +1,6 @@
 {
   "name": "obsidian-ssh-sync",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Sync Obsidian vaults with remote servers via SSH",
   "main": "main.js",
   "scripts": {

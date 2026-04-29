@@ -39,7 +39,7 @@ export function createTestEnv(overrides?: Partial<SyncConfig>): TestEnv {
 /**
  * Create a file in the test vault and optionally seed its manifest entry.
  */
-export function createTestFile(
+export async function createTestFile(
   env: TestEnv,
   relativePath: string,
   content: string,
@@ -53,7 +53,7 @@ export function createTestFile(
     const stat = fs.statSync(fullPath);
     const crypto = require("crypto");
     const hash = crypto.createHash("sha256").update(content).digest("hex");
-    env.engine.getManifest().setEntry(relativePath, {
+    env.engine._manifest.setEntry(relativePath, {
       path: relativePath,
       localMtime: stat.mtimeMs,
       remoteMtime: stat.mtimeMs,
@@ -61,7 +61,7 @@ export function createTestFile(
       size: stat.size,
       hash,
     });
-    env.engine.getManifest().save();
+    await env.engine._manifest.save();
   }
 
   return fullPath;
