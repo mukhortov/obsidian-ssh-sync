@@ -105,10 +105,10 @@ describe("Edge Cases & Error Handling", () => {
 
   it("E5: plugin internal state files in default exclude patterns", () => {
     const patterns = DEFAULT_CONFIG.excludePatterns;
-    expect(patterns).toContain(".obsidian/plugins/obsidian-ssh-sync/sync-manifest.json");
-    expect(patterns).toContain(".obsidian/plugins/obsidian-ssh-sync/sync-log.json");
+    expect(patterns).toContain(".obsidian/plugins/ssh-sync/sync-manifest.json");
+    expect(patterns).toContain(".obsidian/plugins/ssh-sync/sync-log.json");
     // manifest.json is NOT excluded — it should sync across devices
-    expect(patterns).not.toContain(".obsidian/plugins/obsidian-ssh-sync/manifest.json");
+    expect(patterns).not.toContain(".obsidian/plugins/ssh-sync/manifest.json");
   });
 
   it("E6: empty vault sync — no errors", async () => {

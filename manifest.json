@@ -1,5 +1,5 @@
 {
-  "id": "obsidian-ssh-sync",
+  "id": "ssh-sync",
   "name": "SSH Sync",
   "version": "0.3.0",
   "minAppVersion": "1.4.0",

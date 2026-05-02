@@ -222,19 +222,19 @@ describe("parseRsyncOutput", () => {
 describe("DEFAULT_CONFIG excludePatterns", () => {
   it("excludes sync-log.json to prevent infinite deletion loop", () => {
     expect(DEFAULT_CONFIG.excludePatterns).toContain(
-      ".obsidian/plugins/obsidian-ssh-sync/sync-log.json"
+      ".obsidian/plugins/ssh-sync/sync-log.json"
     );
   });
 
   it("excludes plugin internal state files that should not be synced", () => {
     const patterns = DEFAULT_CONFIG.excludePatterns;
-    expect(patterns).toContain(".obsidian/plugins/obsidian-ssh-sync/sync-manifest.json");
-    expect(patterns).toContain(".obsidian/plugins/obsidian-ssh-sync/sync-log.json");
+    expect(patterns).toContain(".obsidian/plugins/ssh-sync/sync-manifest.json");
+    expect(patterns).toContain(".obsidian/plugins/ssh-sync/sync-log.json");
   });
 
   it("does not exclude plugin manifest.json (should sync across devices)", () => {
     expect(DEFAULT_CONFIG.excludePatterns).not.toContain(
-      ".obsidian/plugins/obsidian-ssh-sync/manifest.json"
+      ".obsidian/plugins/ssh-sync/manifest.json"
     );
   });
 

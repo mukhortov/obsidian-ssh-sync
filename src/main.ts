@@ -28,7 +28,7 @@ export default class SSHSyncPlugin extends Plugin {
 
     // Status bar
     this.statusBarEl = this.addStatusBarItem();
-    this.statusBarEl.addClass("obsidian-ssh-sync-status");
+    this.statusBarEl.addClass("ssh-sync-status");
     this.statusBarEl.addClass("mod-clickable");
     this.statusBarEl.setAttribute("title", "SSH Sync status - click for options");
     this.statusBarEl.addEventListener("click", (evt: MouseEvent) => {
@@ -103,7 +103,7 @@ export default class SSHSyncPlugin extends Plugin {
       vaultPath,
       this.app.vault.configDir,
       "plugins",
-      "obsidian-ssh-sync",
+      "ssh-sync",
       "sync-manifest.json"
     );
 
@@ -209,7 +209,7 @@ export default class SSHSyncPlugin extends Plugin {
         .setIcon("settings")
         .onClick(() => {
           (this.app as any).setting.open();
-          (this.app as any).setting.openTabById("obsidian-ssh-sync");
+          (this.app as any).setting.openTabById("ssh-sync");
         });
     });
 

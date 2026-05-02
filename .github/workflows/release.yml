@@ -50,7 +50,7 @@ jobs:
       - name: Download CI artifact
         uses: actions/download-artifact@v8
         with:
-          name: obsidian-ssh-sync
+          name: ssh-sync
           path: artifact
           run-id: ${{ github.event.workflow_run.id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -59,9 +59,9 @@ jobs:
         env:
           VERSION: ${{ steps.version.outputs.tag }}
         run: |
-          mkdir obsidian-ssh-sync
-          cp artifact/main.js artifact/manifest.json obsidian-ssh-sync/
-          zip -r "obsidian-ssh-sync-v${VERSION}.zip" obsidian-ssh-sync/
+          mkdir ssh-sync
+          cp artifact/main.js artifact/manifest.json ssh-sync/
+          zip -r "ssh-sync-v${VERSION}.zip" ssh-sync/
 
       - name: Generate changelog
         id: changelog
@@ -89,6 +89,6 @@ jobs:
           gh release create "v${VERSION}" \
             --title "v${VERSION}" \
             --notes "$RELEASE_NOTES" \
-            "obsidian-ssh-sync-v${VERSION}.zip" \
+            "ssh-sync-v${VERSION}.zip" \
             artifact/main.js \
             artifact/manifest.json

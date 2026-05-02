@@ -85,6 +85,6 @@ export const DEFAULT_CONFIG: SyncConfig = {
   remotePath: "",
   pollIntervalSeconds: 60,
   syncOnSave: true,
-  excludePatterns: [".git/**", "node_modules/**", ".DS_Store", "*.swp", ".obsidian/plugins/obsidian-ssh-sync/sync-manifest.json", ".obsidian/plugins/obsidian-ssh-sync/sync-log.json"],
+  excludePatterns: [".git/**", "node_modules/**", ".DS_Store", "*.swp", ".obsidian/plugins/ssh-sync/sync-manifest.json", ".obsidian/plugins/ssh-sync/sync-log.json"],
   conflictPolicy: "remote-wins",
 };
