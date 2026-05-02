@@ -10,9 +10,7 @@ jobs:
     name: Create Release
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    if: >-
-      github.event.workflow_run.conclusion == 'success' &&
-      startsWith(github.event.workflow_run.head_branch, 'v')
+    if: github.event.workflow_run.conclusion == 'success'
     permissions:
       contents: write
       actions: read
@@ -45,6 +43,7 @@ jobs:
           fi
 
           echo "tag=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tag_name=${TAG}" >> "$GITHUB_OUTPUT"
           echo "Version ${VERSION} is consistent across tag, manifest.json, and package.json"
 
       - name: Download CI artifact
@@ -66,9 +65,9 @@ jobs:
       - name: Generate changelog
         id: changelog
         env:
-          VERSION: ${{ steps.version.outputs.tag }}
+          TAG_NAME: ${{ steps.version.outputs.tag_name }}
         run: |
-          TAG="v${VERSION}"
+          TAG="${TAG_NAME}"
           PREV_TAG=$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || echo "")
           if [ -n "$PREV_TAG" ]; then
             CHANGELOG=$(git log "${PREV_TAG}..${TAG}" --oneline)
@@ -84,10 +83,11 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ steps.version.outputs.tag }}
+          TAG_NAME: ${{ steps.version.outputs.tag_name }}
           RELEASE_NOTES: ${{ steps.changelog.outputs.notes }}
         run: |
-          gh release create "v${VERSION}" \
-            --title "v${VERSION}" \
+          gh release create "${TAG_NAME}" \
+            --title "${TAG_NAME}" \
             --notes "$RELEASE_NOTES" \
             "ssh-sync-v${VERSION}.zip" \
             artifact/main.js \
