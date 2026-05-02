@@ -1,9 +1,9 @@
 {
   "id": "ssh-sync",
   "name": "SSH Sync",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "minAppVersion": "1.4.0",
-  "description": "Sync vaults with remote servers via SSH",
+  "description": "Sync selected vaults with a remote server via SSH using rsync",
   "author": "Peter Mukhortov",
   "isDesktopOnly": true
 }

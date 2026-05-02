@@ -1,7 +1,7 @@
 {
   "name": "ssh-sync",
-  "version": "0.3.0",
-  "description": "Sync Obsidian vaults with remote servers via SSH",
+  "version": "0.4.0",
+  "description": "Sync selected vaults with a remote server via SSH using rsync",
   "main": "main.js",
   "scripts": {
     "dev": "node esbuild.config.mjs",
