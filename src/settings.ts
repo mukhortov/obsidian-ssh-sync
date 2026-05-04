@@ -14,8 +14,6 @@ export class SSHSyncSettingTab extends PluginSettingTab {
     const { containerEl } = this;
     containerEl.empty();
 
-    containerEl.createEl("h2", { text: "SSH Sync Settings" });
-
     new Setting(containerEl)
       .setName("Enable sync")
       .setDesc("Turn on automatic sync for this vault")
@@ -65,14 +63,16 @@ export class SSHSyncSettingTab extends PluginSettingTab {
         text.inputEl.step = "1";
         // Validate on blur instead of every keystroke so the user can
         // freely clear and retype values without the field resetting.
-        text.inputEl.addEventListener("blur", async () => {
-          const clamped = clampPollInterval(text.inputEl.value);
-          if (clamped !== parseInt(text.inputEl.value, 10)) {
-            text.setValue(String(clamped));
-          }
-          this.plugin.settings.pollIntervalSeconds = clamped;
-          await this.plugin.saveSettings();
-          this.plugin.onSettingsChanged();
+        text.inputEl.addEventListener("blur", () => {
+          void (async () => {
+            const clamped = clampPollInterval(text.inputEl.value);
+            if (clamped !== parseInt(text.inputEl.value, 10)) {
+              text.setValue(String(clamped));
+            }
+            this.plugin.settings.pollIntervalSeconds = clamped;
+            await this.plugin.saveSettings();
+            this.plugin.onSettingsChanged();
+          })();
         });
       });
 
@@ -106,7 +106,7 @@ export class SSHSyncSettingTab extends PluginSettingTab {
       .setDesc("Glob patterns to exclude from sync (one per line)")
       .addTextArea((text) =>
         text
-          .setPlaceholder(".obsidian/**\n.git/**\n.DS_Store")
+          .setPlaceholder(`${this.app.vault.configDir}/**\n.git/**\n.ds_store`)
           .setValue(this.plugin.settings.excludePatterns.join("\n"))
           .onChange(async (value) => {
             this.plugin.settings.excludePatterns = value
@@ -181,7 +181,7 @@ class SyncLogModal extends Modal {
   }
 
   onOpen(): void {
-    this.titleEl.setText("Sync Log");
+    this.titleEl.setText("Sync log");
     const { contentEl } = this;
     contentEl.empty();
 

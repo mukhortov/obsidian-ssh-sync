@@ -85,6 +85,57 @@ export const DEFAULT_CONFIG: SyncConfig = {
   remotePath: "",
   pollIntervalSeconds: 60,
   syncOnSave: true,
-  excludePatterns: [".git/**", "node_modules/**", ".DS_Store", "*.swp", ".obsidian/plugins/ssh-sync/sync-manifest.json", ".obsidian/plugins/ssh-sync/sync-log.json"],
+  excludePatterns: [".git/**", "node_modules/**", ".DS_Store", "*.swp"],
   conflictPolicy: "remote-wins",
 };
+
+/**
+ * Parse raw stored data into a validated partial SyncConfig.
+ * Unknown or malformed fields are silently dropped, falling back to
+ * DEFAULT_CONFIG values when merged by the caller.
+ */
+export function parseStoredSettings(data: unknown): Partial<SyncConfig> {
+  if (!data || typeof data !== "object") {
+    return {};
+  }
+  const raw = data as Record<string, unknown>;
+  const parsed: Partial<SyncConfig> = {};
+
+  if (typeof raw.enabled === "boolean") parsed.enabled = raw.enabled;
+  if (typeof raw.sshHost === "string") parsed.sshHost = raw.sshHost;
+  if (typeof raw.remotePath === "string") parsed.remotePath = raw.remotePath;
+  if (typeof raw.pollIntervalSeconds === "number" && Number.isFinite(raw.pollIntervalSeconds)) {
+    parsed.pollIntervalSeconds = raw.pollIntervalSeconds;
+  }
+  if (typeof raw.syncOnSave === "boolean") parsed.syncOnSave = raw.syncOnSave;
+  if (Array.isArray(raw.excludePatterns) && raw.excludePatterns.every((item: unknown) => typeof item === "string")) {
+    parsed.excludePatterns = raw.excludePatterns;
+  }
+  if (
+    raw.conflictPolicy === "remote-wins" ||
+    raw.conflictPolicy === "local-wins" ||
+    raw.conflictPolicy === "newest-wins"
+  ) {
+    parsed.conflictPolicy = raw.conflictPolicy;
+  }
+
+  return parsed;
+}
+
+/**
+ * Ensure the plugin's own state files are always excluded from sync,
+ * using the vault's actual configDir rather than hardcoding `.obsidian`.
+ */
+export function withPluginExcludes(excludePatterns: readonly string[], configDir: string): string[] {
+  const requiredExcludes = [
+    `${configDir}/plugins/ssh-sync/sync-manifest.json`,
+    `${configDir}/plugins/ssh-sync/sync-log.json`,
+  ];
+  const merged = [...excludePatterns];
+  for (const pattern of requiredExcludes) {
+    if (!merged.includes(pattern)) {
+      merged.push(pattern);
+    }
+  }
+  return merged;
+}

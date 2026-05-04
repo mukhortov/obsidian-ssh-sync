@@ -9,6 +9,10 @@ interface MutableManifestData {
   lastSyncTime: number;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object";
+}
+
 export class ManifestStore {
   private data: MutableManifestData;
 
@@ -20,10 +24,16 @@ export class ManifestStore {
     try {
       if (fs.existsSync(this.filePath)) {
         const raw = fs.readFileSync(this.filePath, "utf-8");
-        const parsed = JSON.parse(raw);
+        const parsed = JSON.parse(raw) as unknown;
+        const parsedRecord = isRecord(parsed) ? parsed : {};
+        const files = isRecord(parsedRecord.files) ? parsedRecord.files : {};
+        const lastSyncTime =
+          typeof parsedRecord.lastSyncTime === "number" && Number.isFinite(parsedRecord.lastSyncTime)
+            ? parsedRecord.lastSyncTime
+            : 0;
         return {
-          files: parsed.files || {},
-          lastSyncTime: parsed.lastSyncTime || 0,
+          files: files as Record<string, ManifestEntry>,
+          lastSyncTime,
         };
       }
     } catch {

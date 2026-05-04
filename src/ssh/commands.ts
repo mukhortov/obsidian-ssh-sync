@@ -36,7 +36,7 @@ function quoteLocalPath(localPath: string): string {
  * ~ is already literal and harmless.
  */
 export function escapeRemotePath(remotePath: string): string {
-  return remotePath.replace(/([ '"\\`#&;|()$!?*\[\]{}])/g, "\\$1");
+  return remotePath.replace(/([ '"\\`#&;|()$!?*{}[\]])/g, "\\$1");
 }
 
 /**

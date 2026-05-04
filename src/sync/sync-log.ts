@@ -16,7 +16,8 @@ export class SyncLog {
     try {
       if (fs.existsSync(this.filePath)) {
         const raw = fs.readFileSync(this.filePath, "utf-8");
-        this.logs = JSON.parse(raw);
+        const parsed = JSON.parse(raw) as unknown;
+        this.logs = Array.isArray(parsed) ? (parsed as SyncLogEntry[]) : [];
       }
     } catch {
       this.logs = [];

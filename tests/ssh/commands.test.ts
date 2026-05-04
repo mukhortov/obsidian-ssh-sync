@@ -220,26 +220,17 @@ describe("parseRsyncOutput", () => {
 });
 
 describe("DEFAULT_CONFIG excludePatterns", () => {
-  it("excludes sync-log.json to prevent infinite deletion loop", () => {
-    expect(DEFAULT_CONFIG.excludePatterns).toContain(
-      ".obsidian/plugins/ssh-sync/sync-log.json"
-    );
-  });
-
-  it("excludes plugin internal state files that should not be synced", () => {
+  it("excludes common non-syncable files", () => {
     const patterns = DEFAULT_CONFIG.excludePatterns;
-    expect(patterns).toContain(".obsidian/plugins/ssh-sync/sync-manifest.json");
-    expect(patterns).toContain(".obsidian/plugins/ssh-sync/sync-log.json");
+    expect(patterns).toContain(".git/**");
+    expect(patterns).toContain("node_modules/**");
+    expect(patterns).toContain(".DS_Store");
+    expect(patterns).toContain("*.swp");
   });
 
-  it("does not exclude plugin manifest.json (should sync across devices)", () => {
-    expect(DEFAULT_CONFIG.excludePatterns).not.toContain(
-      ".obsidian/plugins/ssh-sync/manifest.json"
-    );
-  });
-
-  it("excludes vim swap files", () => {
-    expect(DEFAULT_CONFIG.excludePatterns).toContain("*.swp");
+  it("does not hardcode .obsidian paths (handled dynamically by withPluginExcludes)", () => {
+    const patterns = DEFAULT_CONFIG.excludePatterns;
+    expect(patterns.some((p: string) => p.includes(".obsidian"))).toBe(false);
   });
 });
 

@@ -3,6 +3,9 @@ export interface WatcherFlush {
   readonly deletedFiles: ReadonlySet<string>;
 }
 
+/** Opaque timer handle — works in both Obsidian (number) and Node (Timeout). */
+type TimerHandle = ReturnType<typeof setTimeout>;
+
 /**
  * Detect paths with 3+ consecutive identical leading segments, indicating
  * a runaway recursive sync loop (e.g., "X/X/X/..." or "X/X/X/file.md").
@@ -21,11 +24,28 @@ function hasRecursiveNesting(filePath: string): boolean {
   return false;
 }
 
+function scheduleTimer(callback: () => void, delayMs: number): TimerHandle {
+  if (typeof window !== "undefined") {
+    return window.activeWindow.setTimeout(callback, delayMs) as unknown as TimerHandle;
+  }
+  // eslint-disable-next-line obsidianmd/prefer-active-window-timers -- Node test env fallback
+  return setTimeout(callback, delayMs);
+}
+
+function cancelTimer(handle: TimerHandle): void {
+  if (typeof window !== "undefined") {
+    window.activeWindow.clearTimeout(handle as unknown as number);
+  } else {
+    // eslint-disable-next-line obsidianmd/prefer-active-window-timers -- Node test env fallback
+    clearTimeout(handle);
+  }
+}
+
 export class FileWatcher {
   private pendingChanges = new Set<string>();
   private pendingDeletes = new Set<string>();
   private activeFlush = new Set<string>();
-  private timer: ReturnType<typeof setTimeout> | null = null;
+  private timer: TimerHandle | null = null;
 
   /**
    * When > 0, all incoming events are suppressed. This prevents feedback
@@ -110,26 +130,28 @@ export class FileWatcher {
 
   private scheduleSync(): void {
     if (this.timer) {
-      clearTimeout(this.timer);
+      cancelTimer(this.timer);
     }
-    this.timer = setTimeout(async () => {
-      const flush: WatcherFlush = {
-        changedFiles: new Set(this.pendingChanges),
-        deletedFiles: new Set(this.pendingDeletes),
-      };
-      // Track all flushed paths as "in-flight" until the callback completes.
-      // This prevents the poller from deleting files that are being pushed.
-      for (const f of flush.changedFiles) this.activeFlush.add(f);
-      for (const f of flush.deletedFiles) this.activeFlush.add(f);
-      this.pendingChanges.clear();
-      this.pendingDeletes.clear();
-      this.renameOrigins.clear();
-      try {
-        await this.onSync(flush);
-      } finally {
-        for (const f of flush.changedFiles) this.activeFlush.delete(f);
-        for (const f of flush.deletedFiles) this.activeFlush.delete(f);
-      }
+    this.timer = scheduleTimer(() => {
+      void (async () => {
+        const flush: WatcherFlush = {
+          changedFiles: new Set(this.pendingChanges),
+          deletedFiles: new Set(this.pendingDeletes),
+        };
+        // Track all flushed paths as "in-flight" until the callback completes.
+        // This prevents the poller from deleting files that are being pushed.
+        for (const f of flush.changedFiles) this.activeFlush.add(f);
+        for (const f of flush.deletedFiles) this.activeFlush.add(f);
+        this.pendingChanges.clear();
+        this.pendingDeletes.clear();
+        this.renameOrigins.clear();
+        try {
+          await this.onSync(flush);
+        } finally {
+          for (const f of flush.changedFiles) this.activeFlush.delete(f);
+          for (const f of flush.deletedFiles) this.activeFlush.delete(f);
+        }
+      })();
     }, this.debounceMs);
   }
 
@@ -149,7 +171,7 @@ export class FileWatcher {
     }
     // Cancel the debounce timer
     if (this.timer) {
-      clearTimeout(this.timer);
+      cancelTimer(this.timer);
       this.timer = null;
     }
     const flush: WatcherFlush = {
@@ -180,7 +202,7 @@ export class FileWatcher {
 
   dispose(): void {
     if (this.timer) {
-      clearTimeout(this.timer);
+      cancelTimer(this.timer);
       this.timer = null;
     }
   }
