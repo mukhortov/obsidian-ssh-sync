@@ -15,10 +15,14 @@ import {
 
 /**
  * Real transport adapter — wraps ssh/commands.ts free functions.
- * One instance per SSH host.
+ * Accepts a getter for sshHost so settings changes propagate immediately.
  */
 export class SshTransport implements Transport {
-  constructor(private sshHost: string) {}
+  constructor(private getSshHost: () => string) {}
+
+  private get sshHost(): string {
+    return this.getSshHost();
+  }
 
   async pushFile(
     localPath: string,

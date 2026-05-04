@@ -35,7 +35,7 @@ export class SyncEngine {
     );
     this.syncLog = syncLog ?? new SyncLog(logPath);
     this.conflictResolver = new ConflictResolver(vaultPath, this.syncLog);
-    this.transport = transport ?? new SshTransport(config.sshHost);
+    this.transport = transport ?? new SshTransport(() => config.sshHost);
   }
 
   /** Return a shallow copy of all manifest entries. */

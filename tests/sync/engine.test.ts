@@ -381,4 +381,41 @@ describe("SyncEngine", () => {
       expect.objectContaining({ deleteFlag: true })
     );
   });
+
+  it("picks up sshHost changes after construction (settings propagate immediately)", async () => {
+    const mutableConfig = { ...config, sshHost: "old@host" };
+    const engine = new SyncEngine(mutableConfig, tmpDir, manifestPath);
+
+    vi.mocked(commands.executeCommand).mockResolvedValue({
+      stdout: "", stderr: "", exitCode: 0,
+    });
+
+    // Test connection with original host
+    await engine.testConnection();
+    expect(commands.buildLsCommand).toHaveBeenLastCalledWith("old@host", mutableConfig.remotePath);
+
+    // Change sshHost on the config object (simulates settings UI change)
+    mutableConfig.sshHost = "new@host";
+
+    // Test connection again — should use the new host
+    await engine.testConnection();
+    expect(commands.buildLsCommand).toHaveBeenLastCalledWith("new@host", mutableConfig.remotePath);
+  });
+
+  it("picks up remotePath changes after construction", async () => {
+    const mutableConfig = { ...config, remotePath: "/old/path" };
+    const engine = new SyncEngine(mutableConfig, tmpDir, manifestPath);
+
+    vi.mocked(commands.executeCommand).mockResolvedValue({
+      stdout: "", stderr: "", exitCode: 0,
+    });
+
+    await engine.testConnection();
+    expect(commands.buildLsCommand).toHaveBeenLastCalledWith(mutableConfig.sshHost, "/old/path");
+
+    mutableConfig.remotePath = "/new/path";
+
+    await engine.testConnection();
+    expect(commands.buildLsCommand).toHaveBeenLastCalledWith(mutableConfig.sshHost, "/new/path");
+  });
 });
