@@ -1,6 +1,6 @@
 {
   "name": "ssh-sync",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Sync selected vaults with a remote server via SSH using rsync.",
   "main": "main.js",
   "scripts": {
