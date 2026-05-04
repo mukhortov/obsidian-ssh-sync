@@ -8,12 +8,16 @@
     "build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
     "test": "vitest run",
     "test:watch": "vitest",
-    "lint": "tsc -noEmit -skipLibCheck"
+    "lint": "tsc -noEmit -skipLibCheck",
+    "eslint": "eslint ."
   },
   "devDependencies": {
     "@types/node": "25.5.2",
+    "@typescript-eslint/parser": "^8.59.2",
     "builtin-modules": "5.0.0",
     "esbuild": "0.28.0",
+    "eslint": "^9.39.4",
+    "eslint-plugin-obsidianmd": "^0.2.9",
     "obsidian": "latest",
     "typescript": "6.0.2",
     "vitest": "4.1.4"
